@@ -1,0 +1,5 @@
+{
+  "name": "Biblioteca Ars Magica",
+  "description": "Um aplicativo web para armazenar, consultar e gerenciar um acervo de Ars Magica, incluindo uma ficha de personagem editável para AKIN.",
+  "requestFramePermissions": []
+}
