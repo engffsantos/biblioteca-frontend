@@ -7,7 +7,7 @@ type AnyObject = Record<string, any>;
 
 // Base URL: usa VITE_API_URL quando existir; fallback para dev local.
 const API_BASE_URL =
-    (import.meta as any).env?.VITE_API_URL || 'http://localhost:3000/api';
+    (import.meta as any).env?.VITE_API_URL || 'https://biblioteca-backend-nine-beta.vercel.app/api';
 
 console.log('[API] Base URL =', API_BASE_URL);
 
