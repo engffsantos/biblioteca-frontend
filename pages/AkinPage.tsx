@@ -1,236 +1,415 @@
-
-import React, { useState, useEffect } from 'react';
-import useLocalStorage from '../hooks/useLocalStorage';
-import { Database, Character, VirtueFlaw, Ability } from '../types';
-import { initialData } from '../data/initialData';
+import React, { useEffect, useMemo, useState } from 'react';
+import { api } from '../services/api'; // <-- usa o serviço REST com /api/akin*
 import Badge from '../components/Badge';
 
-// --- Reusable Components ---
+// TIPOS mínimos (ajuste para usar de '../types' se preferir)
+type Characteristics = {
+    int: number; per: number; str: number; sta: number; pre: number; com: number; dex: number; qik: number;
+};
+type Arts = {
+    creo: number; intellego: number; muto: number; perdo: number; rego: number;
+    animal: number; aquam: number; auram: number; corpus: number; herbam: number;
+    ignem: number; imaginem: number; mentem: number; terram: number; vim: number;
+};
+type AkinProfile = {
+    id: string;
+    name: string;
+    house: string;
+    age: number | null;
+    characteristics: Characteristics;
+    arts: Arts;
+    spells: string;
+    notes: string;
+    created_at?: string;
+    updated_at?: string;
+} | null;
 
-const InputField: React.FC<{
-  label: string;
-  name: string;
-  value: string | number;
-  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  type?: string;
-  min?: number;
-}> = ({ label, name, value, onChange, type = 'number', min = 0 }) => (
-    <div className="flex flex-col">
-        <label htmlFor={name} className="text-sm font-medium text-gray-400 mb-1 print:text-black">{label}</label>
-        <input id={name} name={name} type={type} min={min} value={value} onChange={onChange} className="bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-purple-accent print:bg-transparent print:border-none print:p-0 print:text-black" />
+type Ability = { id: string; name: string; value: number; specialty?: string | null };
+type Virtue = { id: string; name: string; description: string; is_major: boolean; page?: number | null };
+type Flaw   = { id: string; name: string; description: string; is_major: boolean; page?: number | null };
+
+type AkinState = {
+    profile: AkinProfile;
+    abilities: Ability[];
+    virtues: Virtue[];
+    flaws: Flaw[];
+};
+
+// UI helper
+const Field: React.FC<{
+    label: string; name: string; value: string | number;
+    onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => void;
+    type?: 'text' | 'number' | 'textarea';
+}> = ({ label, name, value, onChange, type = 'text' }) => (
+    <div className="flex flex-col gap-1">
+        <label htmlFor={name} className="text-sm text-gray-400">{label}</label>
+        {type === 'textarea' ? (
+            <textarea id={name} name={name} value={value as string} onChange={onChange}
+                      className="bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-white" rows={3}/>
+        ) : (
+            <input id={name} name={name} value={value} onChange={onChange} type={type}
+                   className="bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-white"/>
+        )}
     </div>
 );
 
-// --- Main Page Component ---
-
 const AkinPage: React.FC = () => {
-    const [db, setDb] = useLocalStorage<Database>('ars-magica-db', initialData);
-    const [akin, setAkin] = useState<Character>(db.akin);
-    const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+    const [state, setState] = useState<AkinState>({ profile: null, abilities: [], virtues: [], flaws: [] });
+    const [loading, setLoading] = useState(true);
+    const [saving, setSaving] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
-    // Editing States
-    const [editingArt, setEditingArt] = useState<{key: string | null, value: number}>({key: null, value: 0});
+    // Edição inline
     const [editingAbility, setEditingAbility] = useState<Ability | null>(null);
+    const [vfModal, setVfModal] = useState<{ open: boolean; type: 'virtue' | 'flaw'; item: Virtue | Flaw | null }>({ open: false, type: 'virtue', item: null });
 
-    // Modal State
-    const [isModalOpen, setIsModalOpen] = useState(false);
-    const [modalData, setModalData] = useState<{type: 'virtue' | 'flaw', item: VirtueFlaw | null}>({type: 'virtue', item: null});
-    
-    // Sync local state with localStorage on db change
+    // ============ LOAD ============
+
     useEffect(() => {
-        setAkin(db.akin);
-    }, [db.akin]);
-    
-    // --- Handlers ---
-    
-    const handleSimpleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        let cancel = false;
+        async function load() {
+            setLoading(true);
+            try {
+                // GET /api/akin  -> { profile, abilities, virtues, flaws }
+                const data = await api.akin.get(); // backend: router.get('/', ...) :contentReference[oaicite:3]{index=3}
+                if (!cancel) setState({
+                    profile: data.profile,
+                    abilities: data.abilities ?? [],
+                    virtues: data.virtues ?? [],
+                    flaws: data.flaws ?? [],
+                });
+            } catch (e) {
+                console.error('Falha ao carregar AKIN', e);
+            } finally {
+                if (!cancel) setLoading(false);
+            }
+        }
+        void load();
+        return () => { cancel = true; };
+    }, []);
+
+    // ============ PROFILE (PUT /api/akin) ============
+
+    const onProfileChange: React.ChangeEventHandler<HTMLInputElement | HTMLTextAreaElement> = (e) => {
         const { name, value, type } = e.target;
-        const keys = name.split('.');
-        setAkin(prev => {
-            const newAkin = JSON.parse(JSON.stringify(prev));
-            let current: any = newAkin;
-            for(let i = 0; i < keys.length - 1; i++) { current = current[keys[i]]; }
-            current[keys[keys.length - 1]] = type === 'number' ? Number(value) : value;
-            return newAkin;
+        setState(prev => {
+            const p = prev.profile ?? {
+                id: 'akin', name: '', house: '', age: null,
+                characteristics: { int:0, per:0, str:0, sta:0, pre:0, com:0, dex:0, qik:0 },
+                arts: {
+                    creo:0, intellego:0, muto:0, perdo:0, rego:0,
+                    animal:0, aquam:0, auram:0, corpus:0, herbam:0,
+                    ignem:0, imaginem:0, mentem:0, terram:0, vim:0,
+                },
+                spells: '', notes: '',
+            } as AkinProfile;
+
+            // campos simples no root (name, house, age, spells, notes)
+            const next: any = { ...p };
+            if (name === 'age') next.age = value === '' ? null : Number(value);
+            else (next as any)[name] = type === 'number' ? Number(value) : value;
+
+            return { ...prev, profile: next };
         });
     };
 
-    // Arts
-    const handleArtChange = (artKey: keyof Character['arts'], value: number) => {
-        setAkin(prev => ({...prev, arts: {...prev.arts, [artKey]: value}}));
+    const onCharacteristicChange = (key: keyof Characteristics, value: number) => {
+        setState(prev => {
+            if (!prev.profile) return prev;
+            return {
+                ...prev,
+                profile: { ...prev.profile, characteristics: { ...prev.profile.characteristics, [key]: value } }
+            };
+        });
     };
 
-    // Abilities
-    const handleAddAbility = () => {
-        const newAbility: Ability = { id: Date.now().toString(), name: 'Nova Habilidade', value: 0, specialty: '' };
-        setAkin(prev => ({...prev, abilities: [...prev.abilities, newAbility]}));
-        setEditingAbility(newAbility);
+    const onArtChange = (key: keyof Arts, value: number) => {
+        setState(prev => {
+            if (!prev.profile) return prev;
+            return {
+                ...prev,
+                profile: { ...prev.profile, arts: { ...prev.profile.arts, [key]: value } }
+            };
+        });
     };
 
-    const handleUpdateAbility = () => {
+    const saveProfile = async () => {
+        if (!state.profile) return;
+        setSaving('saving');
+        try {
+            // PUT /api/akin (upsert)  :contentReference[oaicite:4]{index=4}
+            const payload = {
+                name: state.profile.name,
+                house: state.profile.house,
+                age: state.profile.age,
+                characteristics: state.profile.characteristics,
+                arts: state.profile.arts,
+                spells: state.profile.spells,
+                notes: state.profile.notes,
+            };
+            const updated = await api.akin.upsert(payload);
+            setState(prev => ({ ...prev, profile: updated.profile }));
+            setSaving('saved');
+            setTimeout(() => setSaving('idle'), 1500);
+        } catch (e) {
+            console.error(e); setSaving('error');
+            setTimeout(() => setSaving('idle'), 2000);
+        }
+    };
+
+    // ============ ABILITIES (POST/PUT/DELETE /api/akin/abilities) ============
+
+    const addAbility = async () => {
+        try {
+            const created = await api.akin.createAbility({ name: 'Nova Habilidade', value: 0, specialty: '' });
+            setState(prev => ({ ...prev, abilities: [...prev.abilities, created] }));
+            setEditingAbility(created);
+        } catch (e) { console.error(e); }
+    };
+
+    const saveAbility = async () => {
         if (!editingAbility) return;
-        setAkin(prev => ({
-            ...prev,
-            abilities: prev.abilities.map(a => a.id === editingAbility.id ? editingAbility : a),
-        }));
-        setEditingAbility(null);
-    };
-    
-    const handleDeleteAbility = (id: string) => {
-        setAkin(prev => ({ ...prev, abilities: prev.abilities.filter(a => a.id !== id) }));
-    };
-
-    // Virtues & Flaws Modal
-    const openModal = (type: 'virtue' | 'flaw', item: VirtueFlaw | null = null) => {
-        setModalData({ type, item: item || { id: '', name: '', description: '', isMajor: false, page: 0 } });
-        setIsModalOpen(true);
+        try {
+            const upd = await api.akin.updateAbility(editingAbility.id, {
+                name: editingAbility.name, value: editingAbility.value, specialty: editingAbility.specialty ?? ''
+            });
+            setState(prev => ({
+                ...prev,
+                abilities: prev.abilities.map(a => a.id === upd.id ? upd : a)
+            }));
+            setEditingAbility(null);
+        } catch (e) { console.error(e); }
     };
 
-    const handleSaveVirtueFlaw = (itemToSave: VirtueFlaw) => {
-        const type = modalData.type;
-        if (itemToSave.id) { // Editing existing
-            setAkin(prev => ({ ...prev, [type]: prev[type].map(v => v.id === itemToSave.id ? itemToSave : v) }));
-        } else { // Adding new
-            const newItem = { ...itemToSave, id: Date.now().toString() };
-            setAkin(prev => ({ ...prev, [type]: [...prev[type], newItem] }));
-        }
-        setIsModalOpen(false);
+    const deleteAbility = async (id: string) => {
+        try {
+            await api.akin.deleteAbility(id);
+            setState(prev => ({ ...prev, abilities: prev.abilities.filter(a => a.id !== id) }));
+        } catch (e) { console.error(e); }
     };
 
-    const handleDeleteVirtueFlaw = (type: 'virtue' | 'flaw', id: string) => {
-        setAkin(prev => ({ ...prev, [type]: prev[type].filter(v => v.id !== id) }));
+    // ============ VIRTUES / FLAWS (POST/PUT/DELETE /api/akin/virtues|flaws) ============
+
+    const openVF = (type: 'virtue' | 'flaw', item?: Virtue | Flaw) => setVfModal({ open: true, type, item: item ?? null });
+    const closeVF = () => setVfModal({ open: false, type: 'virtue', item: null });
+
+    const saveVF = async () => {
+        if (!vfModal.open) return;
+        const isVirtue = vfModal.type === 'virtue';
+        const body = vfModal.item as any;
+        try {
+            if (body?.id) {
+                const upd = isVirtue
+                    ? await api.akin.updateVirtue(body.id, body)
+                    : await api.akin.updateFlaw(body.id, body);
+                setState(prev => ({
+                    ...prev,
+                    [isVirtue ? 'virtues' : 'flaws']: (prev as any)[isVirtue ? 'virtues' : 'flaws'].map((x: any) => x.id === upd.id ? upd : x)
+                }));
+            } else {
+                const created = isVirtue
+                    ? await api.akin.createVirtue(body)
+                    : await api.akin.createFlaw(body);
+                setState(prev => ({
+                    ...prev,
+                    [isVirtue ? 'virtues' : 'flaws']: [ ...(prev as any)[isVirtue ? 'virtues' : 'flaws'], created ]
+                }));
+            }
+            closeVF();
+        } catch (e) { console.error(e); }
     };
 
-    const handleSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
-        setSaveStatus('saving');
-        setDb(prevDb => ({ ...prevDb, akin }));
-        setTimeout(() => {
-            setSaveStatus('saved');
-            setTimeout(() => setSaveStatus('idle'), 2000);
-        }, 500);
+    const deleteVF = async (type: 'virtue' | 'flaw', id: string) => {
+        try {
+            if (type === 'virtue') await api.akin.deleteVirtue(id);
+            else await api.akin.deleteFlaw(id);
+            setState(prev => ({
+                ...prev,
+                [type === 'virtue' ? 'virtues' : 'flaws']: (prev as any)[type === 'virtue' ? 'virtues' : 'flaws'].filter((v: any) => v.id !== id)
+            }));
+        } catch (e) { console.error(e); }
     };
-    
-    const renderAbility = (ability: Ability) => {
-        if (editingAbility?.id === ability.id) {
-            return (
-                 <div key={ability.id} className="flex flex-col sm:flex-row items-center justify-between gap-2 bg-gray-700 p-2 rounded-md w-full print:bg-transparent print:p-0 print:gap-4">
-                    <input type="text" placeholder="Nome" value={editingAbility.name} onChange={e => setEditingAbility(p => p && ({...p, name: e.target.value}))} className="w-full sm:w-1/3 bg-gray-800 border-gray-600 rounded px-2 py-1 print:bg-transparent print:border-none print:p-0 print:text-black"/>
-                    <input type="text" placeholder="Especialidade" value={editingAbility.specialty} onChange={e => setEditingAbility(p => p && ({...p, specialty: e.target.value}))} className="w-full sm:w-1/3 bg-gray-800 border-gray-600 rounded px-2 py-1 print:bg-transparent print:border-none print:p-0 print:text-black"/>
-                    <input type="number" value={editingAbility.value} onChange={e => setEditingAbility(p => p && ({...p, value: Number(e.target.value)}))} className="w-20 bg-gray-800 border-gray-600 rounded px-2 py-1 print:bg-transparent print:border-none print:p-0 print:text-black"/>
-                    <div className="flex gap-2 print:hidden">
-                        <button type="button" onClick={handleUpdateAbility} className="text-green-accent hover:text-green-400">Salvar</button>
-                        <button type="button" onClick={() => setEditingAbility(null)} className="text-gray-400 hover:text-white">Cancelar</button>
-                    </div>
-                </div>
-            )
-        }
-        return (
-             <div key={ability.id} className="flex items-center justify-between bg-gray-800/50 p-2 rounded-md group print:bg-transparent print:p-0">
-                <span className="text-white print:text-black">{ability.name} {ability.specialty && `(${ability.specialty})`}</span>
-                <div className="flex items-center gap-3">
-                    <span className="font-bold text-lg text-purple-accent print:text-black">{ability.value}</span>
-                    <button type="button" onClick={() => setEditingAbility({...ability})} className="text-gray-400 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity print:hidden">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.536L16.732 3.732z" /></svg>
-                    </button>
-                    <button type="button" onClick={() => handleDeleteAbility(ability.id)} className="text-red-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity print:hidden">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 012 0v6a1 1 0 11-2 0V8z" clipRule="evenodd" /></svg>
-                    </button>
+
+    // ============ RENDER ============
+
+    const abilitiesSorted = useMemo(() => [...state.abilities].sort((a, b) => a.name.localeCompare(b.name)), [state.abilities]);
+    const virtuesSorted   = useMemo(() => [...state.virtues].sort((a, b) => a.name.localeCompare(b.name)), [state.virtues]);
+    const flawsSorted     = useMemo(() => [...state.flaws].sort((a, b) => a.name.localeCompare(b.name)), [state.flaws]);
+
+    if (loading) return <div className="p-6 text-white">Carregando AKIN…</div>;
+
+    return (
+        <div className="container mx-auto p-4 sm:p-6 lg:p-8">
+            <div className="flex items-center justify-between mb-4">
+                <h1 className="text-3xl font-bold text-white">AKIN</h1>
+                <div className="flex items-center gap-2">
+                    <Badge text={saving === 'saving' ? 'Salvando…' : saving === 'saved' ? 'Salvo' : ' '} color="green" />
+                    <button onClick={saveProfile} className="bg-green-accent text-gray-950 font-bold py-2 px-4 rounded-lg hover:bg-green-accent/80">Salvar Perfil</button>
                 </div>
             </div>
-        )
-    }
 
-    // --- Render ---
-    return (
-        <div className="container mx-auto p-4 sm:p-6 lg:p-8 print:p-0">
-            <form onSubmit={handleSubmit} className="space-y-8">
-                <div className="flex justify-between items-center mb-6">
-                    <h1 className="text-3xl font-bold text-white print:text-black">Ficha de Personagem: {akin.name}</h1>
+            {/* Perfil básico */}
+            <div className="bg-gray-900 rounded-lg p-4 md:p-6 mb-6">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <Field label="Nome"  name="name"  value={state.profile?.name || ''} onChange={onProfileChange}/>
+                    <Field label="Casa"  name="house" value={state.profile?.house || ''} onChange={onProfileChange}/>
+                    <Field label="Idade" name="age"   value={state.profile?.age ?? ''} onChange={onProfileChange} type="number"/>
                 </div>
 
-                <div className="bg-gray-900 p-6 rounded-lg shadow-lg space-y-8 print:bg-white print:shadow-none print:p-0">
-                    {/* Identidade & Características */}
-                    <section><h2 className="text-xl font-semibold text-purple-accent mb-4 border-b border-gray-700 pb-2 print:text-black print:border-black">Identidade</h2><div className="grid grid-cols-1 md:grid-cols-3 gap-6"><InputField label="Nome" name="name" value={akin.name} onChange={handleSimpleChange} type="text" /><InputField label="Casa" name="house" value={akin.house} onChange={handleSimpleChange} type="text" /><InputField label="Idade" name="age" value={akin.age} onChange={handleSimpleChange} /></div></section>
-                    <section><h2 className="text-xl font-semibold text-purple-accent mb-4 border-b border-gray-700 pb-2 print:text-black print:border-black">Características</h2><div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">{Object.entries(akin.characteristics).map(([key, value]) => (<InputField key={key} label={key.toUpperCase()} name={`characteristics.${key}`} value={value} onChange={handleSimpleChange} />))}</div></section>
-                    
-                    {/* Artes Herméticas */}
-                    <section>
-                        <h2 className="text-xl font-semibold text-purple-accent mb-4 border-b border-gray-700 pb-2 print:text-black print:border-black">Artes Herméticas</h2>
-                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                             <div><h3 className="text-lg font-medium text-gray-300 mb-3 print:text-black">Técnicas</h3><div className="space-y-3">{(['creo', 'intellego', 'muto', 'perdo', 'rego'] as const).map(key => (<div key={key} className="flex items-center justify-between bg-gray-800/50 p-2 rounded-md print:bg-transparent print:p-0">{editingArt.key === key ? <><input type="number" value={editingArt.value} onChange={(e) => setEditingArt(p => ({...p, value: Number(e.target.value)}))} className="w-16 bg-gray-700 border border-gray-600 rounded-md px-2 py-1 text-white print:bg-transparent print:border-none print:text-black" autoFocus/><button type="button" onClick={() => { handleArtChange(key, editingArt.value); setEditingArt({key: null, value: 0})}} className="text-green-accent hover:text-green-400 print:hidden">Salvar</button></> : <><span className="font-medium text-white capitalize print:text-black">{key}</span><div className="flex items-center gap-3"><span className="font-bold text-lg text-purple-accent print:text-black">{akin.arts[key]}</span><button type="button" onClick={() => setEditingArt({key, value: akin.arts[key]})} className="text-gray-400 hover:text-white print:hidden"><svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.536L16.732 3.732z" /></svg></button></div></>}</div>))}</div></div>
-                             <div className="lg:col-span-2"><h3 className="text-lg font-medium text-gray-300 mb-3 print:text-black">Formas</h3><div className="grid grid-cols-1 md:grid-cols-2 gap-3">{(['animal', 'aquam', 'auram', 'corpus', 'herbam', 'ignem', 'imaginem', 'mentem', 'terram', 'vim'] as const).map(key => (<div key={key} className="flex items-center justify-between bg-gray-800/50 p-2 rounded-md print:bg-transparent print:p-0">{editingArt.key === key ? <><input type="number" value={editingArt.value} onChange={(e) => setEditingArt(p => ({...p, value: Number(e.target.value)}))} className="w-16 bg-gray-700 border border-gray-600 rounded-md px-2 py-1 text-white print:bg-transparent print:border-none print:text-black" autoFocus/><button type="button" onClick={() => { handleArtChange(key, editingArt.value); setEditingArt({key: null, value: 0})}} className="text-green-accent hover:text-green-400 print:hidden">Salvar</button></> : <><span className="font-medium text-white capitalize print:text-black">{key}</span><div className="flex items-center gap-3"><span className="font-bold text-lg text-purple-accent print:text-black">{akin.arts[key]}</span><button type="button" onClick={() => setEditingArt({key, value: akin.arts[key]})} className="text-gray-400 hover:text-white print:hidden"><svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.536L16.732 3.732z" /></svg></button></div></>}</div>))}</div></div>
+                <div className="border-t border-gray-700 my-4" />
+
+                {/* Características (abreviado para o essencial; pode expandir conforme sua UI antiga) */}
+                <h2 className="text-xl text-white font-semibold mb-2">Características</h2>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    {(['int','per','str','sta','pre','com','dex','qik'] as (keyof Characteristics)[]).map(k => (
+                        <div key={k} className="flex items-center gap-2">
+                            <span className="text-gray-400 w-10 uppercase">{k}</span>
+                            <input type="number" value={state.profile?.characteristics[k] ?? 0}
+                                   onChange={e => onCharacteristicChange(k, Number(e.target.value))}
+                                   className="bg-gray-800 border border-gray-700 rounded-md px-2 py-1 text-white w-20"/>
                         </div>
-                    </section>
-
-                    {/* Habilidades */}
-                    <section><h2 className="text-xl font-semibold text-purple-accent mb-4 border-b border-gray-700 pb-2 print:text-black print:border-black">Habilidades</h2><div className="space-y-2">{akin.abilities.map(renderAbility)}</div><button type="button" onClick={handleAddAbility} className="mt-4 text-sm bg-gray-700 hover:bg-gray-600 text-purple-accent font-semibold py-2 px-4 rounded-lg transition-colors print:hidden">+ Adicionar Habilidade</button></section>
-
-                    {/* Virtudes e Defeitos */}
-                    <section className="grid grid-cols-1 md:grid-cols-2 gap-8 print:break-inside-avoid">
-                        <div><div className="flex justify-between items-center mb-4 border-b border-gray-700 pb-2 print:border-black"><h2 className="text-xl font-semibold text-purple-accent print:text-black">Virtudes</h2><button type="button" onClick={() => openModal('virtue')} className="text-sm bg-gray-700 hover:bg-gray-600 text-green-accent font-semibold py-1 px-3 rounded-lg print:hidden">+ Adicionar</button></div><div className="space-y-4">{akin.virtues.map(v => (<div key={v.id} className="bg-gray-800/50 p-4 rounded-lg group print:bg-transparent print:p-0 print:pb-2 print:border-b print:border-gray-300 print:rounded-none"><div className="flex justify-between items-start"><h3 className="font-bold text-white pr-2 print:text-black">{v.name}</h3><Badge text={v.isMajor ? 'Grande' : 'Menor'} color={v.isMajor ? 'orange' : 'blue'}/></div><p className="text-sm text-gray-400 my-2 print:text-black">{v.description}</p><div className="flex justify-between items-center text-xs text-gray-500 print:text-gray-600"><span>Pág. {v.page || 'N/A'}</span><div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity print:hidden"><button type="button" onClick={() => openModal('virtue', v)} className="hover:text-white">Editar</button><button type="button" onClick={() => handleDeleteVirtueFlaw('virtue', v.id)} className="hover:text-red-400">Excluir</button></div></div></div>))}</div></div>
-                        <div><div className="flex justify-between items-center mb-4 border-b border-gray-700 pb-2 print:border-black"><h2 className="text-xl font-semibold text-purple-accent print:text-black">Defeitos</h2><button type="button" onClick={() => openModal('flaw')} className="text-sm bg-gray-700 hover:bg-gray-600 text-red-accent font-semibold py-1 px-3 rounded-lg print:hidden">+ Adicionar</button></div><div className="space-y-4">{akin.flaws.map(f => (<div key={f.id} className="bg-gray-800/50 p-4 rounded-lg group print:bg-transparent print:p-0 print:pb-2 print:border-b print:border-gray-300 print:rounded-none"><div className="flex justify-between items-start"><h3 className="font-bold text-white pr-2 print:text-black">{f.name}</h3><Badge text={f.isMajor ? 'Grande' : 'Menor'} color={f.isMajor ? 'red' : 'blue'}/></div><p className="text-sm text-gray-400 my-2 print:text-black">{f.description}</p><div className="flex justify-between items-center text-xs text-gray-500 print:text-gray-600"><span>Pág. {f.page || 'N/A'}</span><div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity print:hidden"><button type="button" onClick={() => openModal('flaw', f)} className="hover:text-white">Editar</button><button type="button" onClick={() => handleDeleteVirtueFlaw('flaw', f.id)} className="hover:text-red-400">Excluir</button></div></div></div>))}</div></div>
-                    </section>
+                    ))}
                 </div>
 
-                <div className="flex justify-end pt-4 gap-4 print:hidden">
-                    <button type="button" onClick={() => window.print()} className="bg-blue-accent text-gray-950 font-bold py-2 px-6 rounded-lg hover:bg-blue-accent/80 transition-all duration-300 text-center shadow-lg flex items-center justify-center gap-2">
-                         <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5 4v3H4a2 2 0 00-2 2v6a2 2 0 002 2h12a2 2 0 002-2V9a2 2 0 00-2-2h-1V4a2 2 0 00-2-2H7a2 2 0 00-2 2zm8 0H7v3h6V4zm0 8H7v4h6v-4z" clipRule="evenodd" /></svg>
-                        Imprimir Ficha
-                    </button>
-                    <button type="submit" className="bg-purple-accent text-gray-950 font-bold py-2 px-6 rounded-lg hover:bg-purple-accent/80 transition-all duration-300 w-48 text-center shadow-lg" disabled={saveStatus === 'saving'}>{saveStatus === 'saving' ? 'Salvando...' : saveStatus === 'saved' ? 'Salvo!' : 'Salvar Ficha'}</button>
+                <div className="border-t border-gray-700 my-4" />
+
+                {/* Artes (abreviado) */}
+                <h2 className="text-xl text-white font-semibold mb-2">Artes</h2>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    {(['creo','intellego','muto','perdo','rego','animal','aquam','auram','corpus','herbam','ignem','imaginem','mentem','terram','vim'] as (keyof Arts)[]).map(k => (
+                        <div key={k} className="flex items-center gap-2">
+                            <span className="text-gray-400 w-24 capitalize">{k}</span>
+                            <input type="number" value={state.profile?.arts[k] ?? 0}
+                                   onChange={e => onArtChange(k, Number(e.target.value))}
+                                   className="bg-gray-800 border border-gray-700 rounded-md px-2 py-1 text-white w-20"/>
+                        </div>
+                    ))}
                 </div>
-            </form>
-            
-            {/* Modal for Virtues/Flaws */}
-            {isModalOpen && <VirtueFlawModal data={modalData} onClose={() => setIsModalOpen(false)} onSave={handleSaveVirtueFlaw} />}
-        </div>
-    );
-};
 
-
-// --- Modal Component ---
-
-const VirtueFlawModal: React.FC<{
-    data: { type: 'virtue' | 'flaw', item: VirtueFlaw | null },
-    onClose: () => void,
-    onSave: (item: VirtueFlaw) => void
-}> = ({ data, onClose, onSave }) => {
-    const [formData, setFormData] = useState<VirtueFlaw>(data.item || { id: '', name: '', description: '', page: 0, isMajor: false });
-
-    useEffect(() => {
-        setFormData(data.item || { id: '', name: '', description: '', page: 0, isMajor: false });
-    }, [data.item]);
-
-    const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-        const { name, value, type, checked } = e.target as HTMLInputElement;
-        setFormData(prev => ({ ...prev, [name]: type === 'checkbox' ? checked : type === 'number' ? parseInt(value) || 0 : value }));
-    };
-
-    const handleSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
-        onSave(formData);
-    };
-
-    const title = `${formData.id ? 'Editar' : 'Adicionar'} ${data.type === 'virtue' ? 'Virtude' : 'Defeito'}`;
-
-    return (
-        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 print:hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
-            <div className="bg-gray-900 rounded-lg p-8 max-w-lg w-full shadow-2xl border border-gray-700">
-                <h3 id="modal-title" className="text-lg font-bold text-white mb-6">{title}</h3>
-                <form onSubmit={handleSubmit} className="space-y-4">
-                    <div><label htmlFor="name" className="text-sm font-medium text-gray-400 block mb-1">Nome</label><input type="text" name="name" id="name" value={formData.name} onChange={handleChange} className="w-full bg-gray-800 border-gray-700 rounded-md px-3 py-2 text-white" required /></div>
-                    <div><label htmlFor="description" className="text-sm font-medium text-gray-400 block mb-1">Descrição</label><textarea name="description" id="description" value={formData.description} onChange={handleChange} rows={3} className="w-full bg-gray-800 border-gray-700 rounded-md px-3 py-2 text-white" /></div>
-                    <div className="flex gap-4">
-                        <div className="flex-grow"><label htmlFor="page" className="text-sm font-medium text-gray-400 block mb-1">Página</label><input type="number" name="page" id="page" value={formData.page} onChange={handleChange} className="w-full bg-gray-800 border-gray-700 rounded-md px-3 py-2 text-white" /></div>
-                        <div className="flex items-end pb-2"><label className="flex items-center gap-2 text-white cursor-pointer"><input type="checkbox" name="isMajor" checked={formData.isMajor} onChange={handleChange} className="h-4 w-4 rounded bg-gray-700 border-gray-600 text-purple-accent focus:ring-purple-accent" /> É uma qualidade Grande?</label></div>
-                    </div>
-                    <div className="flex justify-end gap-4 pt-4">
-                        <button type="button" onClick={onClose} className="py-2 px-4 rounded-lg bg-gray-700 hover:bg-gray-600 text-white font-semibold transition-colors">Cancelar</button>
-                        <button type="submit" className="py-2 px-4 rounded-lg bg-purple-accent hover:bg-purple-accent/80 text-white font-semibold transition-colors">Salvar</button>
-                    </div>
-                </form>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                    <Field label="Feitiços (livre)" name="spells" value={state.profile?.spells || ''} onChange={onProfileChange} type="textarea"/>
+                    <Field label="Notas"             name="notes"  value={state.profile?.notes  || ''} onChange={onProfileChange} type="textarea"/>
+                </div>
             </div>
+
+            {/* Habilidades */}
+            <div className="bg-gray-900 rounded-lg p-4 md:p-6 mb-6">
+                <div className="flex items-center justify-between mb-3">
+                    <h2 className="text-xl text-white font-semibold">Habilidades</h2>
+                    <button onClick={addAbility} className="bg-blue-accent text-gray-950 font-bold py-2 px-4 rounded-lg hover:bg-blue-accent/80">Adicionar</button>
+                </div>
+
+                <div className="space-y-3">
+                    {abilitiesSorted.map(a => (
+                        <div key={a.id} className="flex flex-col md:flex-row md:items-center gap-2 bg-gray-800 rounded-md p-3">
+                            {editingAbility?.id === a.id ? (
+                                <>
+                                    <input className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-white md:w-1/3"
+                                           value={editingAbility.name}
+                                           onChange={e => setEditingAbility(p => p && ({ ...p, name: e.target.value }))}/>
+                                    <input type="number" className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-white w-24"
+                                           value={editingAbility.value}
+                                           onChange={e => setEditingAbility(p => p && ({ ...p, value: Number(e.target.value) }))}/>
+                                    <input className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-white md:flex-1"
+                                           placeholder="Especialidade"
+                                           value={editingAbility.specialty ?? ''}
+                                           onChange={e => setEditingAbility(p => p && ({ ...p, specialty: e.target.value }))}/>
+                                    <div className="flex gap-2">
+                                        <button onClick={saveAbility} className="bg-green-accent text-gray-950 font-bold py-1 px-3 rounded">Salvar</button>
+                                        <button onClick={() => setEditingAbility(null)} className="bg-gray-700 text-white font-bold py-1 px-3 rounded">Cancelar</button>
+                                    </div>
+                                </>
+                            ) : (
+                                <>
+                                    <div className="flex-1 text-white">{a.name}</div>
+                                    <Badge text={`Valor: ${a.value}`} color="purple"/>
+                                    {a.specialty && <Badge text={`Esp.: ${a.specialty}`} color="orange"/>}
+                                    <div className="flex gap-2">
+                                        <button onClick={() => setEditingAbility(a)} className="bg-blue-accent text-gray-950 font-bold py-1 px-3 rounded">Editar</button>
+                                        <button onClick={() => void deleteAbility(a.id)} className="bg-red-accent text-gray-950 font-bold py-1 px-3 rounded">Excluir</button>
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    ))}
+                    {abilitiesSorted.length === 0 && <div className="text-gray-400">Nenhuma habilidade cadastrada.</div>}
+                </div>
+            </div>
+
+            {/* Virtudes e Falhas */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-10">
+                <div className="bg-gray-900 rounded-lg p-4 md:p-6">
+                    <div className="flex items-center justify-between mb-3">
+                        <h2 className="text-xl text-white font-semibold">Virtudes</h2>
+                        <button onClick={() => openVF('virtue')} className="bg-blue-accent text-gray-950 font-bold py-2 px-4 rounded-lg hover:bg-blue-accent/80">Adicionar</button>
+                    </div>
+                    <div className="space-y-3">
+                        {virtuesSorted.map(v => (
+                            <div key={v.id} className="flex flex-col md:flex-row md:items-center gap-2 bg-gray-800 rounded-md p-3">
+                                <div className="flex-1">
+                                    <div className="text-white font-semibold">{v.name}</div>
+                                    <div className="text-gray-300 text-sm">{v.description}</div>
+                                </div>
+                                <Badge text={v.is_major ? 'Maior' : 'Menor'} color={v.is_major ? 'red' : 'green'}/>
+                                {!!v.page && <Badge text={`p. ${v.page}`} color="orange"/>}
+                                <div className="flex gap-2">
+                                    <button onClick={() => openVF('virtue', v)} className="bg-blue-accent text-gray-950 font-bold py-1 px-3 rounded">Editar</button>
+                                    <button onClick={() => void deleteVF('virtue', v.id)} className="bg-red-accent text-gray-950 font-bold py-1 px-3 rounded">Excluir</button>
+                                </div>
+                            </div>
+                        ))}
+                        {virtuesSorted.length === 0 && <div className="text-gray-400">Nenhuma virtude.</div>}
+                    </div>
+                </div>
+
+                <div className="bg-gray-900 rounded-lg p-4 md:p-6">
+                    <div className="flex items-center justify-between mb-3">
+                        <h2 className="text-xl text-white font-semibold">Falhas</h2>
+                        <button onClick={() => openVF('flaw')} className="bg-blue-accent text-gray-950 font-bold py-2 px-4 rounded-lg hover:bg-blue-accent/80">Adicionar</button>
+                    </div>
+                    <div className="space-y-3">
+                        {flawsSorted.map(f => (
+                            <div key={f.id} className="flex flex-col md:flex-row md:items-center gap-2 bg-gray-800 rounded-md p-3">
+                                <div className="flex-1">
+                                    <div className="text-white font-semibold">{f.name}</div>
+                                    <div className="text-gray-300 text-sm">{f.description}</div>
+                                </div>
+                                <Badge text={f.is_major ? 'Maior' : 'Menor'} color={f.is_major ? 'red' : 'green'}/>
+                                {!!f.page && <Badge text={`p. ${f.page}`} color="orange"/>}
+                                <div className="flex gap-2">
+                                    <button onClick={() => openVF('flaw', f)} className="bg-blue-accent text-gray-950 font-bold py-1 px-3 rounded">Editar</button>
+                                    <button onClick={() => void deleteVF('flaw', f.id)} className="bg-red-accent text-gray-950 font-bold py-1 px-3 rounded">Excluir</button>
+                                </div>
+                            </div>
+                        ))}
+                        {flawsSorted.length === 0 && <div className="text-gray-400">Nenhuma falha.</div>}
+                    </div>
+                </div>
+            </div>
+
+            {/* Modal simples p/ Virtudes/Falhas */}
+            {vfModal.open && (
+                <div className="fixed inset-0 bg-black/60 grid place-items-center p-4">
+                    <div className="bg-gray-900 rounded-lg p-4 md:p-6 w-full max-w-2xl">
+                        <h3 className="text-white text-xl font-semibold mb-3">{vfModal.type === 'virtue' ? 'Virtude' : 'Falha'}</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <Field label="Nome" name="name" value={(vfModal.item as any)?.name ?? ''} onChange={e => setVfModal(m => ({ ...m, item: { ...(m.item ?? {} as any), name: e.target.value } }))}/>
+                            <Field label="Página" name="page" value={(vfModal.item as any)?.page ?? ''} onChange={e => setVfModal(m => ({ ...m, item: { ...(m.item ?? {} as any), page: e.target.value === '' ? null : Number(e.target.value) } }))} />
+                            <div className="flex items-center gap-2">
+                                <input id="is_major" type="checkbox" checked={Boolean((vfModal.item as any)?.is_major)} onChange={e => setVfModal(m => ({ ...m, item: { ...(m.item ?? {} as any), is_major: e.target.checked } }))}/>
+                                <label htmlFor="is_major" className="text-gray-300">Maior</label>
+                            </div>
+                            <div className="md:col-span-2">
+                                <Field label="Descrição" name="description" value={(vfModal.item as any)?.description ?? ''} onChange={e => setVfModal(m => ({ ...m, item: { ...(m.item ?? {} as any), description: e.target.value } }))} type="textarea"/>
+                            </div>
+                        </div>
+                        <div className="mt-4 flex justify-end gap-2">
+                            <button onClick={saveVF} className="bg-green-accent text-gray-950 font-bold py-2 px-4 rounded-lg">Salvar</button>
+                            <button onClick={closeVF} className="bg-gray-700 text-white font-bold py-2 px-4 rounded-lg">Cancelar</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
         </div>
     );
 };
