@@ -1,92 +1,152 @@
 // src/hooks/useApi.ts
-// Hooks React que consomem o serviço REST, com correções de promessas ignoradas.
-// - useLibrary(): lista + CRUD, com refresh que retorna Promise<void>
-// - useLibraryItem(id): busca item único, descartando a Promise interna com `void run()`
-// Também reexporta tipos de '../types' para compatibilidade.
+// Hooks que consomem o serviço REST e expõem a API esperada pelos componentes.
+// Também normaliza campos vindos do backend para o formato usado no frontend.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../services/api';
 
-// ✅ Reexport para compatibilidade com imports antigos (se existirem)
-export { ItemType, LabTextCategory, type LibraryItem } from '../types';
+// ✅ Reexporta os tipos/enums do módulo de tipos (opcional)
+//    Assim, se você importar de '../hooks/useApi', não quebra.
+export {
+    ItemType,
+    LabTextCategory,
+    type LibraryItem,
+    type Summae,
+    type Tractatus,
+    type LabText,
+} from '../types';
 
+// ================== Tipos locais auxiliares ==================
 type FetchState<T> = { data: T | null; loading: boolean; error: string | null };
 
-// Se você tem os tipos fortes no projeto, importe-os de '../types' e remova `any`.
-type AnyItem = any;
+// ================== Normalização de itens ==================
+// O backend responde com snake_case (created_at) e campos opcionais.
+// O front usa camelCase (createdAt). Vamos ajustar aqui.
+function normalizeItem(row: any) {
+    if (!row) return row;
 
+    // Renomeia datas (se existirem) e mantém o resto
+    const createdAt = row.created_at ?? row.createdAt ?? null;
+    const updatedAt = row.updated_at ?? row.updatedAt ?? null;
+
+    // Retorna o objeto com camelCase esperado pelo UI
+    return {
+        ...row,
+        createdAt,
+        updatedAt,
+    };
+}
+
+// ================== Lista + CRUD ==================
 export function useLibrary() {
-    const [items, setItems] = useState<AnyItem[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
+    const [state, setState] = useState<FetchState<any[]>>({
+        data: null,
+        loading: true,
+        error: null,
+    });
 
-    // 🔧 Devolve Promise<void> para o linter entender o fluxo assíncrono
-    const refresh = useCallback(async (): Promise<void> => {
-        setLoading(true);
-        setError(null);
+    const refresh = useCallback(async () => {
+        setState((s) => ({ ...s, loading: true, error: null }));
         try {
-            const rows = await api.library.list();
-            setItems(rows);
-        } catch (e: any) {
-            setError(e?.message || 'Falha ao carregar');
-        } finally {
-            setLoading(false);
+            const items = await api.list();
+            const normalized = (items || []).map(normalizeItem);
+            setState({ data: normalized, loading: false, error: null });
+        } catch (err: any) {
+            setState({ data: null, loading: false, error: String(err?.message || err) });
         }
     }, []);
 
     useEffect(() => {
-        // ✅ descarta explicitamente a Promise para não acusar "ignored promise"
         void refresh();
     }, [refresh]);
 
-    const addItem = useCallback(async (payload: Partial<AnyItem>) => {
-        const created = await api.library.create(payload as any);
-        setItems(prev => [created, ...prev]);
-        return created;
-    }, []);
+    // ✅ Nomes compatíveis com os componentes existentes:
+    const addItem = useCallback(
+        async (payload: any) => {
+            await api.create(payload);
+            await refresh();
+        },
+        [refresh]
+    );
 
-    const updateItem = useCallback(async (id: string, payload: Partial[AnyItem]) => {
-        const updated = await api.library.update(id, payload as any);
-        setItems(prev => prev.map(i => (i.id === id ? updated : i)));
-        return updated;
-    }, []);
+    const updateItem = useCallback(
+        async (id: string, payload: any) => {
+            await api.update(id, payload);
+            await refresh();
+        },
+        [refresh]
+    );
 
-    const deleteItem = useCallback(async (id: string) => {
-        await api.library.remove(id);
-        setItems(prev => prev.filter(i => i.id !== id));
-    }, []);
+    const deleteItem = useCallback(
+        async (id: string) => {
+            await api.remove(id);
+            await refresh();
+        },
+        [refresh]
+    );
 
-    return { items, loading, error, refresh, addItem, updateItem, deleteItem };
+    // (Mantém também nomes genéricos, se você quiser usar em outros pontos)
+    const create = addItem;
+    const update = updateItem;
+    const remove = deleteItem;
+
+    return useMemo(
+        () => ({
+            items: state.data ?? [],
+            loading: state.loading,
+            error: state.error,
+            // métodos
+            refresh,
+            addItem,
+            updateItem,
+            deleteItem,
+            // aliases
+            create,
+            update,
+            remove,
+        }),
+        [state, refresh, addItem, updateItem, deleteItem, create, update, remove]
+    );
 }
 
-export function useLibraryItem(id: string | null) {
-    const [state, setState] = useState<FetchState<AnyItem>>({
-        data: null, loading: !!id, error: null
+// ================== Item único ==================
+export function useLibraryItem(id: string | undefined) {
+    const [state, setState] = useState<FetchState<any>>({
+        data: null,
+        loading: true,
+        error: null,
     });
 
     useEffect(() => {
         let cancelled = false;
 
-        async function run(): Promise<void> {
-            if (!id) return;
-            setState({ data: null, loading: true, error: null });
+        async function run() {
+            if (!id) {
+                setState({ data: null, loading: false, error: 'ID ausente' });
+                return;
+            }
+            setState((s) => ({ ...s, loading: true, error: null }));
             try {
-                const item = await api.library.get(id);
-                if (!cancelled) setState({ data: item, loading: false, error: null });
-            } catch (e: any) {
-                if (!cancelled) setState({ data: null, loading: false, error: e?.message || 'Falha ao buscar item' });
+                const item = await api.get(id);
+                const normalized = normalizeItem(item);
+                if (!cancelled) setState({ data: normalized, loading: false, error: null });
+            } catch (err: any) {
+                if (!cancelled) setState({ data: null, loading: false, error: String(err?.message || err) });
             }
         }
 
-        // ✅ descarta explicitamente a Promise para agradar o linter
         void run();
-
-        return () => { cancelled = true; };
+        return () => {
+            cancelled = true;
+        };
     }, [id]);
 
-    return useMemo(() => ({
-        item: state.data,
-        loading: state.loading,
-        error: state.error,
-    }), [state]);
+    return useMemo(
+        () => ({
+            item: state.data,
+            loading: state.loading,
+            error: state.error,
+        }),
+        [state]
+    );
 }

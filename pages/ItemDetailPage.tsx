@@ -3,7 +3,13 @@
 
 import React from 'react';
 import { useParams, Link, Navigate } from 'react-router-dom';
-import { useLibraryItem, ItemType, LabTextCategory } from '../hooks/useApi';
+
+// ✅ Hook vem de useApi
+import { useLibraryItem } from '../hooks/useApi';
+
+// ✅ Enums/tipos vêm do módulo de tipos (fonte única de verdade)
+import { ItemType, LabTextCategory } from '../types';
+
 import Badge from '../components/Badge';
 
 const typeColors: Record<ItemType, 'blue' | 'green' | 'purple'> = {
@@ -27,7 +33,8 @@ const DetailField: React.FC<{ label: string; value?: string | number | null }> =
 
 const ItemDetailPage: React.FC = () => {
     const { id } = useParams<{ id: string }>();
-    const { item, loading, error } = useLibraryItem(id ?? null);
+    // ✅ Passe apenas string | undefined (não passe null)
+    const { item, loading, error } = useLibraryItem(id);
 
     if (!id) return <Navigate to="/library" replace />;
     if (loading) return <div className="p-6 text-white">Carregando...</div>;
@@ -44,7 +51,9 @@ const ItemDetailPage: React.FC = () => {
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
                         <Badge text={item.type} color={typeColors[item.type]} />
-                        {item.type === ItemType.LabText && item.category && <Badge text={item.category} color={categoryColors[item.category]} />}
+                        {item.type === ItemType.LabText && item.category && (
+                            <Badge text={item.category} color={categoryColors[item.category]} />
+                        )}
                     </div>
                 </div>
 
@@ -52,7 +61,7 @@ const ItemDetailPage: React.FC = () => {
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-6">
                     {item.type !== ItemType.LabText && <DetailField label="Assunto" value={(item as any).subject} />}
-                    {'level' in item && <DetailField label="Nível" value={(item as any).level} />}
+                    {'level'   in item && <DetailField label="Nível" value={(item as any).level} />}
                     {'quality' in item && <DetailField label="Qualidade" value={(item as any).quality} />}
                     {item.type === ItemType.LabText && <DetailField label="Efeito" value={(item as any).effect} />}
                     {item.type === ItemType.LabText && <DetailField label="Total de Laboratório" value={(item as any).labTotal} />}
@@ -65,8 +74,12 @@ const ItemDetailPage: React.FC = () => {
                 </div>
 
                 <div className="mt-6 flex gap-3">
-                    <Link to={`/item/edit/${item.id}`} className="bg-green-accent text-gray-950 font-bold py-2 px-4 rounded-lg hover:bg-green-accent/80 transition-colors">Editar</Link>
-                    <Link to="/library" className="bg-gray-700 text-white font-bold py-2 px-4 rounded-lg hover:bg-gray-600 transition-colors">Voltar</Link>
+                    <Link to={`/item/edit/${item.id}`} className="text-green-accent hover:underline text-sm font-medium">
+                        Editar
+                    </Link>
+                    <Link to="/library" className="text-blue-accent hover:underline text-sm font-medium">
+                        Voltar
+                    </Link>
                 </div>
             </div>
         </div>
