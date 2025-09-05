@@ -1,23 +1,25 @@
+// src/pages/AkinPage.tsx
 import React, { useEffect, useMemo, useState } from 'react';
-import { api } from '../services/api'; // <-- usa o serviço REST com /api/akin*
+import { api as apiSvc } from '../services/api';
 import Badge from '../components/Badge';
 
-// TIPOS mínimos (ajuste para usar de '../types' se preferir)
-type Characteristics = {
-    int: number; per: number; str: number; sta: number; pre: number; com: number; dex: number; qik: number;
-};
+/** =========================
+ *  Tipos (compatíveis com backend atual)
+ *  ========================= */
+type Characteristics = { int: number; per: number; str: number; sta: number; pre: number; com: number; dex: number; qik: number; };
 type Arts = {
     creo: number; intellego: number; muto: number; perdo: number; rego: number;
     animal: number; aquam: number; auram: number; corpus: number; herbam: number;
     ignem: number; imaginem: number; mentem: number; terram: number; vim: number;
 };
 type AkinProfile = {
-    id: string;
+    id?: string;
     name: string;
     house: string;
     age: number | null;
     characteristics: Characteristics;
     arts: Arts;
+    /** Backend guarda TEXT. Aqui usamos JSON stringificado de Spell[] */
     spells: string;
     notes: string;
     created_at?: string;
@@ -25,190 +27,224 @@ type AkinProfile = {
 } | null;
 
 type Ability = { id: string; name: string; value: number; specialty?: string | null };
-type Virtue = { id: string; name: string; description: string; is_major: boolean; page?: number | null };
-type Flaw   = { id: string; name: string; description: string; is_major: boolean; page?: number | null };
+type Virtue  = { id: string; name: string; description: string; is_major: boolean; page?: number | null };
+type Flaw    = { id: string; name: string; description: string; is_major: boolean; page?: number | null };
 
-type AkinState = {
-    profile: AkinProfile;
-    abilities: Ability[];
-    virtues: Virtue[];
-    flaws: Flaw[];
+type AkinState = { profile: AkinProfile; abilities: Ability[]; virtues: Virtue[]; flaws: Flaw[] };
+
+/** Magias (apenas front; salvas no TEXT `profile.spells` como JSON) */
+export type Spell = {
+    id: string;
+    name: string;
+    technique: 'Creo' | 'Intellego' | 'Muto' | 'Perdo' | 'Rego';
+    form: 'Animal' | 'Aquam' | 'Auram' | 'Corpus' | 'Herbam' | 'Ignem' | 'Imaginem' | 'Mentem' | 'Terram' | 'Vim';
+    level: number;
+    bonus?: string;
+    range: string;
+    duration: string;
+    target: string;
+    exp: number;
+    mastery?: string;
+    notes?: string;
 };
 
-// UI helper
-const Field: React.FC<{
-    label: string; name: string; value: string | number;
-    onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => void;
-    type?: 'text' | 'number' | 'textarea';
-}> = ({ label, name, value, onChange, type = 'text' }) => (
-    <div className="flex flex-col gap-1">
-        <label htmlFor={name} className="text-sm text-gray-400">{label}</label>
-        {type === 'textarea' ? (
-            <textarea id={name} name={name} value={value as string} onChange={onChange}
-                      className="bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-white" rows={3}/>
-        ) : (
-            <input id={name} name={name} value={value} onChange={onChange} type={type}
-                   className="bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-white"/>
-        )}
+/** =========================
+ *  Helpers de API e estado
+ *  ========================= */
+function ns() {
+    const hasNs = !!(apiSvc as any).akin;
+    return {
+        get: () => hasNs ? apiSvc.akin.get() : (apiSvc.getAkin?.() as Promise<any>),
+        upsert: (p: any) => hasNs ? apiSvc.akin.upsert(p) : (apiSvc.saveAkinProfile?.(p) as Promise<any>),
+
+        createAbility: (p: any) => hasNs ? apiSvc.akin.createAbility(p) : (apiSvc.addAbility?.(p) as Promise<any>),
+        updateAbility: (id: string, p: any) => hasNs ? apiSvc.akin.updateAbility(id, p) : (apiSvc.updateAbility?.(id, p) as Promise<any>),
+        deleteAbility: (id: string) => hasNs ? apiSvc.akin.deleteAbility(id) : (apiSvc.deleteAbility?.(id) as Promise<void>),
+
+        createVirtue: (p: any) => hasNs ? apiSvc.akin.createVirtue(p) : (apiSvc.addVirtue?.(p) as Promise<any>),
+        updateVirtue: (id: string, p: any) => hasNs ? apiSvc.akin.updateVirtue(id, p) : (apiSvc.updateVirtue?.(id, p) as Promise<any>),
+        deleteVirtue: (id: string) => hasNs ? apiSvc.akin.deleteVirtue(id) : (apiSvc.deleteVirtue?.(id) as Promise<void>),
+
+        createFlaw: (p: any) => hasNs ? apiSvc.akin.createFlaw(p) : (apiSvc.addFlaw?.(p) as Promise<any>),
+        updateFlaw: (id: string, p: any) => hasNs ? apiSvc.akin.updateFlaw(id, p) : (apiSvc.updateFlaw?.(id, p) as Promise<any>),
+        deleteFlaw: (id: string) => hasNs ? apiSvc.akin.deleteFlaw(id) : (apiSvc.deleteFlaw?.(id) as Promise<void>),
+    };
+}
+
+function emptyProfile(): NonNullable<AkinProfile> {
+    return {
+        id: 'akin',
+        name: '',
+        house: '',
+        age: null,
+        characteristics: { int: 0, per: 0, str: 0, sta: 0, pre: 0, com: 0, dex: 0, qik: 0 },
+        arts: { creo: 0, intellego: 0, muto: 0, perdo: 0, rego: 0, animal: 0, aquam: 0, auram: 0, corpus: 0, herbam: 0, ignem: 0, imaginem: 0, mentem: 0, terram: 0, vim: 0 },
+        spells: '[]', // JSON de Spell[]
+        notes: '',
+    };
+}
+
+/** Serialização de magias em TEXT profile.spells (JSON) */
+function parseSpells(spellsText: string | undefined | null): Spell[] {
+    if (!spellsText) return [];
+    try {
+        const arr = JSON.parse(spellsText);
+        return Array.isArray(arr) ? arr as Spell[] : [];
+    } catch {
+        return [];
+    }
+}
+function stringifySpells(spells: Spell[]): string {
+    return JSON.stringify(spells ?? []);
+}
+
+/** =========================
+ *  UI Reutilizáveis
+ *  ========================= */
+const InputField: React.FC<{
+    label: string;
+    name: string;
+    value: string | number;
+    onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+    type?: string;
+    min?: number;
+}> = ({ label, name, value, onChange, type = 'number', min = 0 }) => (
+    <div className="flex flex-col">
+        <label htmlFor={name} className="text-sm font-medium text-gray-400 mb-1 print:text-black">{label}</label>
+        <input
+            id={name}
+            name={name}
+            type={type}
+            min={min}
+            value={value}
+            onChange={onChange}
+            className="bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-purple-accent print:bg-transparent print:border-none print:p-0 print:text-black"
+        />
     </div>
 );
 
+/** =========================
+ *  Página principal
+ *  ========================= */
 const AkinPage: React.FC = () => {
     const [state, setState] = useState<AkinState>({ profile: null, abilities: [], virtues: [], flaws: [] });
     const [loading, setLoading] = useState(true);
-    const [saving, setSaving] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+    const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
     // Edição inline
+    const [editingCharacteristic, setEditingCharacteristic] = useState<{ key: keyof Characteristics | null, value: number }>({ key: null, value: 0 });
+    const [editingArt, setEditingArt] = useState<{ key: keyof Arts | null, value: number }>({ key: null, value: 0 });
     const [editingAbility, setEditingAbility] = useState<Ability | null>(null);
+
+    // Magias (front-only, serializa em profile.spells)
+    const [spells, setSpells] = useState<Spell[]>([]);
+    const [isSpellModalOpen, setIsSpellModalOpen] = useState(false);
+    const [spellModalData, setSpellModalData] = useState<Spell | null>(null);
+
+    // Virtudes/Falhas modal
     const [vfModal, setVfModal] = useState<{ open: boolean; type: 'virtue' | 'flaw'; item: Virtue | Flaw | null }>({ open: false, type: 'virtue', item: null });
 
-    // ============ LOAD ============
-
+    /** Carregar do backend */
     useEffect(() => {
         let cancel = false;
-        async function load() {
+        (async () => {
             setLoading(true);
             try {
-                // GET /api/akin  -> { profile, abilities, virtues, flaws }
-                const data = await api.akin.get(); // backend: router.get('/', ...) :contentReference[oaicite:3]{index=3}
-                if (!cancel) setState({
-                    profile: data.profile,
-                    abilities: data.abilities ?? [],
-                    virtues: data.virtues ?? [],
-                    flaws: data.flaws ?? [],
+                const svc = ns();
+                const data = await svc.get();
+                if (cancel) return;
+
+                const profile: NonNullable<AkinProfile> = data?.profile ?? emptyProfile();
+                setState({
+                    profile,
+                    abilities: Array.isArray(data?.abilities) ? data.abilities : [],
+                    virtues: Array.isArray(data?.virtues) ? data.virtues : [],
+                    flaws: Array.isArray(data?.flaws) ? data.flaws : [],
                 });
+                setSpells(parseSpells(profile.spells));
             } catch (e) {
                 console.error('Falha ao carregar AKIN', e);
             } finally {
                 if (!cancel) setLoading(false);
             }
-        }
-        void load();
+        })();
         return () => { cancel = true; };
     }, []);
 
-    // ============ PROFILE (PUT /api/akin) ============
-
-    const onProfileChange: React.ChangeEventHandler<HTMLInputElement | HTMLTextAreaElement> = (e) => {
+    /** Handlers gerais */
+    const handleSimpleChange: React.ChangeEventHandler<HTMLInputElement> = (e) => {
         const { name, value, type } = e.target;
         setState(prev => {
-            const p = prev.profile ?? {
-                id: 'akin', name: '', house: '', age: null,
-                characteristics: { int:0, per:0, str:0, sta:0, pre:0, com:0, dex:0, qik:0 },
-                arts: {
-                    creo:0, intellego:0, muto:0, perdo:0, rego:0,
-                    animal:0, aquam:0, auram:0, corpus:0, herbam:0,
-                    ignem:0, imaginem:0, mentem:0, terram:0, vim:0,
-                },
-                spells: '', notes: '',
-            } as AkinProfile;
-
-            // campos simples no root (name, house, age, spells, notes)
+            const p = (prev.profile ?? emptyProfile()) as NonNullable<AkinProfile>;
             const next: any = { ...p };
-            if (name === 'age') next.age = value === '' ? null : Number(value);
-            else (next as any)[name] = type === 'number' ? Number(value) : value;
-
+            next[name] = type === 'number' ? (value === '' ? null : Number(value)) : value;
             return { ...prev, profile: next };
         });
     };
 
-    const onCharacteristicChange = (key: keyof Characteristics, value: number) => {
+    const handleCharacteristicChange = (key: keyof Characteristics, value: number) => {
         setState(prev => {
-            if (!prev.profile) return prev;
-            return {
-                ...prev,
-                profile: { ...prev.profile, characteristics: { ...prev.profile.characteristics, [key]: value } }
-            };
+            const p = (prev.profile ?? emptyProfile()) as NonNullable<AkinProfile>;
+            return { ...prev, profile: { ...p, characteristics: { ...p.characteristics, [key]: value } } };
         });
     };
 
-    const onArtChange = (key: keyof Arts, value: number) => {
+    const handleArtChange = (key: keyof Arts, value: number) => {
         setState(prev => {
-            if (!prev.profile) return prev;
-            return {
-                ...prev,
-                profile: { ...prev.profile, arts: { ...prev.profile.arts, [key]: value } }
-            };
+            const p = (prev.profile ?? emptyProfile()) as NonNullable<AkinProfile>;
+            return { ...prev, profile: { ...p, arts: { ...p.arts, [key]: value } } };
         });
     };
 
-    const saveProfile = async () => {
-        if (!state.profile) return;
-        setSaving('saving');
+    /** Habilidades (backend) */
+    const handleAddAbility = async () => {
         try {
-            // PUT /api/akin (upsert)  :contentReference[oaicite:4]{index=4}
-            const payload = {
-                name: state.profile.name,
-                house: state.profile.house,
-                age: state.profile.age,
-                characteristics: state.profile.characteristics,
-                arts: state.profile.arts,
-                spells: state.profile.spells,
-                notes: state.profile.notes,
-            };
-            const updated = await api.akin.upsert(payload);
-            setState(prev => ({ ...prev, profile: updated.profile }));
-            setSaving('saved');
-            setTimeout(() => setSaving('idle'), 1500);
-        } catch (e) {
-            console.error(e); setSaving('error');
-            setTimeout(() => setSaving('idle'), 2000);
-        }
-    };
-
-    // ============ ABILITIES (POST/PUT/DELETE /api/akin/abilities) ============
-
-    const addAbility = async () => {
-        try {
-            const created = await api.akin.createAbility({ name: 'Nova Habilidade', value: 0, specialty: '' });
+            const svc = ns();
+            const created = await svc.createAbility({ name: 'Nova Habilidade', value: 0, specialty: '' });
             setState(prev => ({ ...prev, abilities: [...prev.abilities, created] }));
             setEditingAbility(created);
         } catch (e) { console.error(e); }
     };
-
-    const saveAbility = async () => {
+    const handleUpdateAbility = async () => {
         if (!editingAbility) return;
         try {
-            const upd = await api.akin.updateAbility(editingAbility.id, {
-                name: editingAbility.name, value: editingAbility.value, specialty: editingAbility.specialty ?? ''
+            const svc = ns();
+            const upd = await svc.updateAbility(editingAbility.id, {
+                name: editingAbility.name,
+                value: Number(editingAbility.value) || 0,
+                specialty: editingAbility.specialty ?? '',
             });
-            setState(prev => ({
-                ...prev,
-                abilities: prev.abilities.map(a => a.id === upd.id ? upd : a)
-            }));
+            setState(prev => ({ ...prev, abilities: prev.abilities.map(a => a.id === upd.id ? upd : a) }));
             setEditingAbility(null);
         } catch (e) { console.error(e); }
     };
-
-    const deleteAbility = async (id: string) => {
+    const handleDeleteAbility = async (id: string) => {
         try {
-            await api.akin.deleteAbility(id);
+            const svc = ns();
+            await svc.deleteAbility(id);
             setState(prev => ({ ...prev, abilities: prev.abilities.filter(a => a.id !== id) }));
         } catch (e) { console.error(e); }
     };
 
-    // ============ VIRTUES / FLAWS (POST/PUT/DELETE /api/akin/virtues|flaws) ============
-
-    const openVF = (type: 'virtue' | 'flaw', item?: Virtue | Flaw) => setVfModal({ open: true, type, item: item ?? null });
+    /** Virtudes/Falhas (backend) */
+    const openVirtueFlawModal = (type: 'virtue' | 'flaw', item?: Virtue | Flaw | null) => {
+        setVfModal({ open: true, type, item: item ?? null });
+    };
     const closeVF = () => setVfModal({ open: false, type: 'virtue', item: null });
-
     const saveVF = async () => {
         if (!vfModal.open) return;
         const isVirtue = vfModal.type === 'virtue';
         const body = vfModal.item as any;
         try {
+            const svc = ns();
             if (body?.id) {
-                const upd = isVirtue
-                    ? await api.akin.updateVirtue(body.id, body)
-                    : await api.akin.updateFlaw(body.id, body);
+                const upd = isVirtue ? await svc.updateVirtue(body.id, body) : await svc.updateFlaw(body.id, body);
                 setState(prev => ({
                     ...prev,
                     [isVirtue ? 'virtues' : 'flaws']: (prev as any)[isVirtue ? 'virtues' : 'flaws'].map((x: any) => x.id === upd.id ? upd : x)
                 }));
             } else {
-                const created = isVirtue
-                    ? await api.akin.createVirtue(body)
-                    : await api.akin.createFlaw(body);
+                const created = isVirtue ? await svc.createVirtue(body) : await svc.createFlaw(body);
                 setState(prev => ({
                     ...prev,
                     [isVirtue ? 'virtues' : 'flaws']: [ ...(prev as any)[isVirtue ? 'virtues' : 'flaws'], created ]
@@ -217,11 +253,11 @@ const AkinPage: React.FC = () => {
             closeVF();
         } catch (e) { console.error(e); }
     };
-
-    const deleteVF = async (type: 'virtue' | 'flaw', id: string) => {
+    const handleDeleteVirtueFlaw = async (type: 'virtue' | 'flaw', id: string) => {
         try {
-            if (type === 'virtue') await api.akin.deleteVirtue(id);
-            else await api.akin.deleteFlaw(id);
+            const svc = ns();
+            if (type === 'virtue') await svc.deleteVirtue(id);
+            else await svc.deleteFlaw(id);
             setState(prev => ({
                 ...prev,
                 [type === 'virtue' ? 'virtues' : 'flaws']: (prev as any)[type === 'virtue' ? 'virtues' : 'flaws'].filter((v: any) => v.id !== id)
@@ -229,187 +265,552 @@ const AkinPage: React.FC = () => {
         } catch (e) { console.error(e); }
     };
 
-    // ============ RENDER ============
+    /** Magias (front-only, persistidas dentro de profile.spells TEXT) */
+    const openSpellModal = (spell: Spell | null = null) => {
+        setSpellModalData(spell);
+        setIsSpellModalOpen(true);
+    };
+    const handleSaveSpell = (spellToSave: Omit<Spell, 'id'> & { id?: string }) => {
+        setSpells(prev => {
+            if (spellToSave.id) {
+                return prev.map(s => s.id === spellToSave.id ? (spellToSave as Spell) : s);
+            }
+            return [...prev, { ...(spellToSave as Spell), id: Date.now().toString() }];
+        });
+        setIsSpellModalOpen(false);
+    };
+    const handleDeleteSpell = (id: string) => {
+        setSpells(prev => prev.filter(s => s.id !== id));
+    };
 
+    /** Salvar perfil (inclui serialização das magias no TEXT `profile.spells`) */
+    const handleSubmit: React.FormEventHandler = async (e) => {
+        e.preventDefault();
+        if (!state.profile) return;
+        setSaveStatus('saving');
+        try {
+            const svc = ns();
+            const payload = {
+                name: state.profile.name,
+                house: state.profile.house,
+                age: state.profile.age,
+                characteristics: state.profile.characteristics,
+                arts: state.profile.arts,
+                spells: stringifySpells(spells),
+                notes: state.profile.notes,
+            };
+            const updated = await svc.upsert(payload);
+            setState(prev => ({ ...prev, profile: updated?.profile ?? { ...(prev.profile ?? emptyProfile()), ...payload } }));
+            setSaveStatus('saved');
+            setTimeout(() => setSaveStatus('idle'), 1500);
+        } catch (err) {
+            console.error(err);
+            setSaveStatus('error');
+            setTimeout(() => setSaveStatus('idle'), 1500);
+        }
+    };
+
+    /** Ordenações */
     const abilitiesSorted = useMemo(() => [...state.abilities].sort((a, b) => a.name.localeCompare(b.name)), [state.abilities]);
     const virtuesSorted   = useMemo(() => [...state.virtues].sort((a, b) => a.name.localeCompare(b.name)), [state.virtues]);
     const flawsSorted     = useMemo(() => [...state.flaws].sort((a, b) => a.name.localeCompare(b.name)), [state.flaws]);
 
     if (loading) return <div className="p-6 text-white">Carregando AKIN…</div>;
 
+    const akin = (state.profile ?? emptyProfile());
+
+    /** Render de habilidade (estilo do seu exemplo) */
+    const renderAbility = (ability: Ability) => {
+        if (editingAbility?.id === ability.id) {
+            return (
+                <div key={ability.id} className="flex flex-col sm:flex-row items-center justify-between gap-2 bg-gray-700 p-2 rounded-md w-full print:bg-transparent print:p-0 print:gap-4">
+                    <input
+                        type="text"
+                        placeholder="Nome"
+                        value={editingAbility.name}
+                        onChange={e => setEditingAbility(p => p && ({ ...p, name: e.target.value }))}
+                        className="w-full sm:w-1/3 bg-gray-800 border-gray-600 rounded px-2 py-1 print:bg-transparent print:border-none print:p-0 print:text-black"
+                    />
+                    <input
+                        type="text"
+                        placeholder="Especialidade"
+                        value={editingAbility.specialty ?? ''}
+                        onChange={e => setEditingAbility(p => p && ({ ...p, specialty: e.target.value }))}
+                        className="w-full sm:w-1/3 bg-gray-800 border-gray-600 rounded px-2 py-1 print:bg-transparent print:border-none print:p-0 print:text-black"
+                    />
+                    <input
+                        type="number"
+                        value={editingAbility.value}
+                        onChange={e => setEditingAbility(p => p && ({ ...p, value: Number(e.target.value) || 0 }))}
+                        className="w-20 bg-gray-800 border-gray-600 rounded px-2 py-1 print:bg-transparent print:border-none print:p-0 print:text-black"
+                    />
+                    <div className="flex gap-2 print:hidden">
+                        <button type="button" onClick={handleUpdateAbility} className="text-green-accent hover:text-green-400">Salvar</button>
+                        <button type="button" onClick={() => setEditingAbility(null)} className="text-gray-400 hover:text-white">Cancelar</button>
+                    </div>
+                </div>
+            );
+        }
+        return (
+            <div key={ability.id} className="flex items-center justify-between bg-gray-800/50 p-2 rounded-md group print:bg-transparent print:p-0">
+        <span className="text-white print:text-black">
+          {ability.name} {ability.specialty ? `(${ability.specialty})` : ''}
+        </span>
+                <div className="flex items-center gap-3">
+                    <span className="font-bold text-lg text-purple-accent print:text-black">{ability.value}</span>
+                    <button type="button" onClick={() => setEditingAbility({ ...ability })} className="text-gray-400 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity print:hidden">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.536L16.732 3.732z" /></svg>
+                    </button>
+                    <button type="button" onClick={() => handleDeleteAbility(ability.id)} className="text-red-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity print:hidden">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 012 0v6a1 1 0 11-2 0V8z" clipRule="evenodd" /></svg>
+                    </button>
+                </div>
+            </div>
+        );
+    };
+
     return (
-        <div className="container mx-auto p-4 sm:p-6 lg:p-8">
-            <div className="flex items-center justify-between mb-4">
-                <h1 className="text-3xl font-bold text-white">AKIN</h1>
-                <div className="flex items-center gap-2">
-                    <Badge text={saving === 'saving' ? 'Salvando…' : saving === 'saved' ? 'Salvo' : ' '} color="green" />
-                    <button onClick={saveProfile} className="bg-green-accent text-gray-950 font-bold py-2 px-4 rounded-lg hover:bg-green-accent/80">Salvar Perfil</button>
-                </div>
-            </div>
-
-            {/* Perfil básico */}
-            <div className="bg-gray-900 rounded-lg p-4 md:p-6 mb-6">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <Field label="Nome"  name="name"  value={state.profile?.name || ''} onChange={onProfileChange}/>
-                    <Field label="Casa"  name="house" value={state.profile?.house || ''} onChange={onProfileChange}/>
-                    <Field label="Idade" name="age"   value={state.profile?.age ?? ''} onChange={onProfileChange} type="number"/>
+        <div className="container mx-auto p-4 sm:p-6 lg:p-8 print:p-0">
+            <form onSubmit={handleSubmit} className="space-y-8">
+                <div className="flex justify-between items-center mb-6">
+                    <h1 className="text-3xl font-bold text-white print:text-black">Ficha de Personagem: {akin.name || 'AKIN'}</h1>
+                    <div className="hidden print:block text-sm">Impressão</div>
                 </div>
 
-                <div className="border-t border-gray-700 my-4" />
-
-                {/* Características (abreviado para o essencial; pode expandir conforme sua UI antiga) */}
-                <h2 className="text-xl text-white font-semibold mb-2">Características</h2>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                    {(['int','per','str','sta','pre','com','dex','qik'] as (keyof Characteristics)[]).map(k => (
-                        <div key={k} className="flex items-center gap-2">
-                            <span className="text-gray-400 w-10 uppercase">{k}</span>
-                            <input type="number" value={state.profile?.characteristics[k] ?? 0}
-                                   onChange={e => onCharacteristicChange(k, Number(e.target.value))}
-                                   className="bg-gray-800 border border-gray-700 rounded-md px-2 py-1 text-white w-20"/>
+                <div className="bg-gray-900 p-6 rounded-lg shadow-lg space-y-8 print:bg-white print:shadow-none print:p-0">
+                    {/* Identidade */}
+                    <section>
+                        <h2 className="text-xl font-semibold text-purple-accent mb-4 border-b border-gray-700 pb-2 print:text-black print:border-black">Identidade</h2>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                            <InputField label="Nome"  name="name"  value={akin.name ?? ''}  onChange={handleSimpleChange} type="text" />
+                            <InputField label="Casa"  name="house" value={akin.house ?? ''} onChange={handleSimpleChange} type="text" />
+                            <InputField label="Idade" name="age"   value={akin.age ?? ''}   onChange={handleSimpleChange} />
                         </div>
-                    ))}
-                </div>
+                    </section>
 
-                <div className="border-t border-gray-700 my-4" />
-
-                {/* Artes (abreviado) */}
-                <h2 className="text-xl text-white font-semibold mb-2">Artes</h2>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                    {(['creo','intellego','muto','perdo','rego','animal','aquam','auram','corpus','herbam','ignem','imaginem','mentem','terram','vim'] as (keyof Arts)[]).map(k => (
-                        <div key={k} className="flex items-center gap-2">
-                            <span className="text-gray-400 w-24 capitalize">{k}</span>
-                            <input type="number" value={state.profile?.arts[k] ?? 0}
-                                   onChange={e => onArtChange(k, Number(e.target.value))}
-                                   className="bg-gray-800 border border-gray-700 rounded-md px-2 py-1 text-white w-20"/>
-                        </div>
-                    ))}
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                    <Field label="Feitiços (livre)" name="spells" value={state.profile?.spells || ''} onChange={onProfileChange} type="textarea"/>
-                    <Field label="Notas"             name="notes"  value={state.profile?.notes  || ''} onChange={onProfileChange} type="textarea"/>
-                </div>
-            </div>
-
-            {/* Habilidades */}
-            <div className="bg-gray-900 rounded-lg p-4 md:p-6 mb-6">
-                <div className="flex items-center justify-between mb-3">
-                    <h2 className="text-xl text-white font-semibold">Habilidades</h2>
-                    <button onClick={addAbility} className="bg-blue-accent text-gray-950 font-bold py-2 px-4 rounded-lg hover:bg-blue-accent/80">Adicionar</button>
-                </div>
-
-                <div className="space-y-3">
-                    {abilitiesSorted.map(a => (
-                        <div key={a.id} className="flex flex-col md:flex-row md:items-center gap-2 bg-gray-800 rounded-md p-3">
-                            {editingAbility?.id === a.id ? (
-                                <>
-                                    <input className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-white md:w-1/3"
-                                           value={editingAbility.name}
-                                           onChange={e => setEditingAbility(p => p && ({ ...p, name: e.target.value }))}/>
-                                    <input type="number" className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-white w-24"
-                                           value={editingAbility.value}
-                                           onChange={e => setEditingAbility(p => p && ({ ...p, value: Number(e.target.value) }))}/>
-                                    <input className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-white md:flex-1"
-                                           placeholder="Especialidade"
-                                           value={editingAbility.specialty ?? ''}
-                                           onChange={e => setEditingAbility(p => p && ({ ...p, specialty: e.target.value }))}/>
-                                    <div className="flex gap-2">
-                                        <button onClick={saveAbility} className="bg-green-accent text-gray-950 font-bold py-1 px-3 rounded">Salvar</button>
-                                        <button onClick={() => setEditingAbility(null)} className="bg-gray-700 text-white font-bold py-1 px-3 rounded">Cancelar</button>
-                                    </div>
-                                </>
-                            ) : (
-                                <>
-                                    <div className="flex-1 text-white">{a.name}</div>
-                                    <Badge text={`Valor: ${a.value}`} color="purple"/>
-                                    {a.specialty && <Badge text={`Esp.: ${a.specialty}`} color="orange"/>}
-                                    <div className="flex gap-2">
-                                        <button onClick={() => setEditingAbility(a)} className="bg-blue-accent text-gray-950 font-bold py-1 px-3 rounded">Editar</button>
-                                        <button onClick={() => void deleteAbility(a.id)} className="bg-red-accent text-gray-950 font-bold py-1 px-3 rounded">Excluir</button>
-                                    </div>
-                                </>
-                            )}
-                        </div>
-                    ))}
-                    {abilitiesSorted.length === 0 && <div className="text-gray-400">Nenhuma habilidade cadastrada.</div>}
-                </div>
-            </div>
-
-            {/* Virtudes e Falhas */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-10">
-                <div className="bg-gray-900 rounded-lg p-4 md:p-6">
-                    <div className="flex items-center justify-between mb-3">
-                        <h2 className="text-xl text-white font-semibold">Virtudes</h2>
-                        <button onClick={() => openVF('virtue')} className="bg-blue-accent text-gray-950 font-bold py-2 px-4 rounded-lg hover:bg-blue-accent/80">Adicionar</button>
-                    </div>
-                    <div className="space-y-3">
-                        {virtuesSorted.map(v => (
-                            <div key={v.id} className="flex flex-col md:flex-row md:items-center gap-2 bg-gray-800 rounded-md p-3">
-                                <div className="flex-1">
-                                    <div className="text-white font-semibold">{v.name}</div>
-                                    <div className="text-gray-300 text-sm">{v.description}</div>
+                    {/* Características */}
+                    <section>
+                        <h2 className="text-xl font-semibold text-purple-accent mb-4 border-b border-gray-700 pb-2 print:text-black print:border-black">Características</h2>
+                        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
+                            {(Object.keys(akin.characteristics) as Array<keyof Characteristics>).map((key) => (
+                                <div key={key} className="flex flex-col">
+                                    <label className="text-sm font-medium text-gray-400 mb-1 print:text-black">{key.toUpperCase()}</label>
+                                    {editingCharacteristic.key === key ? (
+                                        <div className="flex items-center gap-1">
+                                            <input
+                                                type="number"
+                                                value={editingCharacteristic.value}
+                                                onChange={(e) => setEditingCharacteristic(p => ({ ...p, value: Number(e.target.value) }))}
+                                                className="w-full bg-gray-700 border border-gray-600 rounded-md px-2 py-1 text-white print:bg-transparent print:border-none print:text-black"
+                                                autoFocus
+                                            />
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    handleCharacteristicChange(key, editingCharacteristic.value);
+                                                    setEditingCharacteristic({ key: null, value: 0 });
+                                                }}
+                                                className="text-green-accent hover:text-green-400 print:hidden"
+                                            >
+                                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" /></svg>
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <div className="flex items-center justify-between group bg-gray-800 rounded-md px-3 py-2 print:bg-transparent print:p-0">
+                                            <span className="font-bold text-lg text-purple-accent print:text-black">{akin.characteristics[key]}</span>
+                                            <button
+                                                type="button"
+                                                onClick={() => setEditingCharacteristic({ key, value: akin.characteristics[key] })}
+                                                className="text-gray-400 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity print:hidden"
+                                            >
+                                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.536L16.732 3.732z" /></svg>
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
-                                <Badge text={v.is_major ? 'Maior' : 'Menor'} color={v.is_major ? 'red' : 'green'}/>
-                                {!!v.page && <Badge text={`p. ${v.page}`} color="orange"/>}
-                                <div className="flex gap-2">
-                                    <button onClick={() => openVF('virtue', v)} className="bg-blue-accent text-gray-950 font-bold py-1 px-3 rounded">Editar</button>
-                                    <button onClick={() => void deleteVF('virtue', v.id)} className="bg-red-accent text-gray-950 font-bold py-1 px-3 rounded">Excluir</button>
+                            ))}
+                        </div>
+                    </section>
+
+                    {/* Artes Herméticas */}
+                    <section>
+                        <h2 className="text-xl font-semibold text-purple-accent mb-4 border-b border-gray-700 pb-2 print:text-black print:border-black">Artes Herméticas</h2>
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                            <div>
+                                <h3 className="text-lg font-medium text-gray-300 mb-3 print:text-black">Técnicas</h3>
+                                <div className="space-y-3">
+                                    {(['creo', 'intellego', 'muto', 'perdo', 'rego'] as const).map(key => (
+                                        <div key={key} className="flex items-center justify-between bg-gray-800/50 p-2 rounded-md print:bg-transparent print:p-0">
+                                            {editingArt.key === key ? (
+                                                <>
+                                                    <input
+                                                        type="number"
+                                                        value={editingArt.value}
+                                                        onChange={(e) => setEditingArt(p => ({ ...p, value: Number(e.target.value) }))}
+                                                        className="w-16 bg-gray-700 border border-gray-600 rounded-md px-2 py-1 text-white print:bg-transparent print:border-none print:text-black"
+                                                        autoFocus
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => { handleArtChange(key, editingArt.value); setEditingArt({ key: null, value: 0 }); }}
+                                                        className="text-green-accent hover:text-green-400 print:hidden"
+                                                    >
+                                                        Salvar
+                                                    </button>
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <span className="font-medium text-white capitalize print:text-black">{key}</span>
+                                                    <div className="flex items-center gap-3">
+                                                        <span className="font-bold text-lg text-purple-accent print:text-black">{akin.arts[key]}</span>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setEditingArt({ key, value: akin.arts[key] })}
+                                                            className="text-gray-400 hover:text-white print:hidden"
+                                                        >
+                                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.536L16.732 3.732z" /></svg>
+                                                        </button>
+                                                    </div>
+                                                </>
+                                            )}
+                                        </div>
+                                    ))}
                                 </div>
                             </div>
-                        ))}
-                        {virtuesSorted.length === 0 && <div className="text-gray-400">Nenhuma virtude.</div>}
-                    </div>
-                </div>
 
-                <div className="bg-gray-900 rounded-lg p-4 md:p-6">
-                    <div className="flex items-center justify-between mb-3">
-                        <h2 className="text-xl text-white font-semibold">Falhas</h2>
-                        <button onClick={() => openVF('flaw')} className="bg-blue-accent text-gray-950 font-bold py-2 px-4 rounded-lg hover:bg-blue-accent/80">Adicionar</button>
-                    </div>
-                    <div className="space-y-3">
-                        {flawsSorted.map(f => (
-                            <div key={f.id} className="flex flex-col md:flex-row md:items-center gap-2 bg-gray-800 rounded-md p-3">
-                                <div className="flex-1">
-                                    <div className="text-white font-semibold">{f.name}</div>
-                                    <div className="text-gray-300 text-sm">{f.description}</div>
-                                </div>
-                                <Badge text={f.is_major ? 'Maior' : 'Menor'} color={f.is_major ? 'red' : 'green'}/>
-                                {!!f.page && <Badge text={`p. ${f.page}`} color="orange"/>}
-                                <div className="flex gap-2">
-                                    <button onClick={() => openVF('flaw', f)} className="bg-blue-accent text-gray-950 font-bold py-1 px-3 rounded">Editar</button>
-                                    <button onClick={() => void deleteVF('flaw', f.id)} className="bg-red-accent text-gray-950 font-bold py-1 px-3 rounded">Excluir</button>
+                            <div className="lg:col-span-2">
+                                <h3 className="text-lg font-medium text-gray-300 mb-3 print:text-black">Formas</h3>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    {(['animal', 'aquam', 'auram', 'corpus', 'herbam', 'ignem', 'imaginem', 'mentem', 'terram', 'vim'] as const).map(key => (
+                                        <div key={key} className="flex items-center justify-between bg-gray-800/50 p-2 rounded-md print:bg-transparent print:p-0">
+                                            {editingArt.key === key ? (
+                                                <>
+                                                    <input
+                                                        type="number"
+                                                        value={editingArt.value}
+                                                        onChange={(e) => setEditingArt(p => ({ ...p, value: Number(e.target.value) }))}
+                                                        className="w-16 bg-gray-700 border border-gray-600 rounded-md px-2 py-1 text-white print:bg-transparent print:border-none print:text-black"
+                                                        autoFocus
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => { handleArtChange(key, editingArt.value); setEditingArt({ key: null, value: 0 }); }}
+                                                        className="text-green-accent hover:text-green-400 print:hidden"
+                                                    >
+                                                        Salvar
+                                                    </button>
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <span className="font-medium text-white capitalize print:text-black">{key}</span>
+                                                    <div className="flex items-center gap-3">
+                                                        <span className="font-bold text-lg text-purple-accent print:text-black">{akin.arts[key]}</span>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setEditingArt({ key, value: akin.arts[key] })}
+                                                            className="text-gray-400 hover:text-white print:hidden"
+                                                        >
+                                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.536L16.732 3.732z" /></svg>
+                                                        </button>
+                                                    </div>
+                                                </>
+                                            )}
+                                        </div>
+                                    ))}
                                 </div>
                             </div>
-                        ))}
-                        {flawsSorted.length === 0 && <div className="text-gray-400">Nenhuma falha.</div>}
-                    </div>
-                </div>
-            </div>
+                        </div>
+                    </section>
 
-            {/* Modal simples p/ Virtudes/Falhas */}
+                    {/* Habilidades */}
+                    <section>
+                        <h2 className="text-xl font-semibold text-purple-accent mb-4 border-b border-gray-700 pb-2 print:text-black print:border-black">Habilidades</h2>
+                        <div className="space-y-2">
+                            {abilitiesSorted.map(renderAbility)}
+                        </div>
+                        <button
+                            type="button"
+                            onClick={handleAddAbility}
+                            className="mt-4 text-sm bg-gray-700 hover:bg-gray-600 text-purple-accent font-semibold py-2 px-4 rounded-lg transition-colors print:hidden"
+                        >
+                            + Adicionar Habilidade
+                        </button>
+                    </section>
+
+                    {/* Magias (front-only, salvas em profile.spells como JSON) */}
+                    <section className="print:break-inside-avoid">
+                        <div className="flex justify-between items-center mb-4 border-b border-gray-700 pb-2 print:border-black">
+                            <h2 className="text-xl font-semibold text-purple-accent print:text-black">Magias</h2>
+                            <button type="button" onClick={() => openSpellModal()} className="text-sm bg-gray-700 hover:bg-gray-600 text-green-accent font-semibold py-1 px-3 rounded-lg print:hidden">+ Adicionar Magia</button>
+                        </div>
+                        <div className="space-y-4">
+                            {spells.map(spell => (
+                                <div key={spell.id} className="bg-gray-800/50 p-4 rounded-lg group print:bg-transparent print:p-0 print:pb-2 print:border-b print:border-gray-300 print:rounded-none">
+                                    <div className="flex justify-between items-start">
+                                        <h3 className="font-bold text-white text-lg pr-2 print:text-black">
+                                            {spell.name}{' '}
+                                            <span className="text-sm font-normal text-gray-400">
+                        ({spell.technique} {spell.form} {spell.level})
+                      </span>
+                                        </h3>
+                                        <div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity print:hidden">
+                                            <button type="button" onClick={() => openSpellModal(spell)} className="hover:text-white text-gray-400">
+                                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.536L16.732 3.732z" /></svg>
+                                            </button>
+                                            <button type="button" onClick={() => handleDeleteSpell(spell.id)} className="hover:text-red-400 text-red-500">
+                                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 012 0v6a1 1 0 11-2 0V8z" clipRule="evenodd" /></svg>
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-x-4 gap-y-2 mt-3 text-sm">
+                                        <p><strong className="text-gray-400 print:text-gray-600">Bônus:</strong> {spell.bonus || '–'}</p>
+                                        <p><strong className="text-gray-400 print:text-gray-600">Alcance:</strong> {spell.range}</p>
+                                        <p><strong className="text-gray-400 print:text-gray-600">Duração:</strong> {spell.duration}</p>
+                                        <p><strong className="text-gray-400 print:text-gray-600">Alvo:</strong> {spell.target}</p>
+                                        <p><strong className="text-gray-400 print:text-gray-600">Exp:</strong> {spell.exp}</p>
+                                        <p><strong className="text-gray-400 print:text-gray-600">Maestria:</strong> {spell.mastery || '–'}</p>
+                                    </div>
+                                    {spell.notes && <p className="text-sm text-gray-400 mt-3 pt-3 border-t border-gray-700/50 print:text-black">{spell.notes}</p>}
+                                </div>
+                            ))}
+                            {spells.length === 0 && <p className="text-gray-500 text-center py-4">Nenhuma magia adicionada.</p>}
+                        </div>
+                    </section>
+
+                    {/* Virtudes e Defeitos */}
+                    <section className="grid grid-cols-1 md:grid-cols-2 gap-8 print:break-inside-avoid">
+                        <div>
+                            <div className="flex justify-between items-center mb-4 border-b border-gray-700 pb-2 print:border-black">
+                                <h2 className="text-xl font-semibold text-purple-accent print:text-black">Virtudes</h2>
+                                <button type="button" onClick={() => openVirtueFlawModal('virtue', { id: '', name: '', description: '', is_major: false, page: null })} className="text-sm bg-gray-700 hover:bg-gray-600 text-green-accent font-semibold py-1 px-3 rounded-lg print:hidden">+ Adicionar</button>
+                            </div>
+                            <div className="space-y-4">
+                                {virtuesSorted.map(v => (
+                                    <div key={v.id} className="bg-gray-800/50 p-4 rounded-lg group print:bg-transparent print:p-0 print:pb-2 print:border-b print:border-gray-300 print:rounded-none">
+                                        <div className="flex justify-between items-start">
+                                            <h3 className="font-bold text-white pr-2 print:text-black">{v.name}</h3>
+                                            <Badge text={v.is_major ? 'Grande' : 'Menor'} color={v.is_major ? 'orange' : 'blue'} />
+                                        </div>
+                                        <p className="text-sm text-gray-400 my-2 print:text-black">{v.description}</p>
+                                        <div className="flex justify-between items-center text-xs text-gray-500 print:text-gray-600">
+                                            <span>Pág. {v.page ?? 'N/A'}</span>
+                                            <div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity print:hidden">
+                                                <button type="button" onClick={() => openVirtueFlawModal('virtue', v)} className="hover:text-white">Editar</button>
+                                                <button type="button" onClick={() => handleDeleteVirtueFlaw('virtue', v.id)} className="hover:text-red-400">Excluir</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div>
+                            <div className="flex justify-between items-center mb-4 border-b border-gray-700 pb-2 print:border-black">
+                                <h2 className="text-xl font-semibold text-purple-accent print:text-black">Defeitos</h2>
+                                <button type="button" onClick={() => openVirtueFlawModal('flaw', { id: '', name: '', description: '', is_major: false, page: null })} className="text-sm bg-gray-700 hover:bg-gray-600 text-red-accent font-semibold py-1 px-3 rounded-lg print:hidden">+ Adicionar</button>
+                            </div>
+                            <div className="space-y-4">
+                                {flawsSorted.map(f => (
+                                    <div key={f.id} className="bg-gray-800/50 p-4 rounded-lg group print:bg-transparent print:p-0 print:pb-2 print:border-b print:border-gray-300 print:rounded-none">
+                                        <div className="flex justify-between items-start">
+                                            <h3 className="font-bold text-white pr-2 print:text-black">{f.name}</h3>
+                                            <Badge text={f.is_major ? 'Grande' : 'Menor'} color={f.is_major ? 'red' : 'blue'} />
+                                        </div>
+                                        <p className="text-sm text-gray-400 my-2 print:text-black">{f.description}</p>
+                                        <div className="flex justify-between items-center text-xs text-gray-500 print:text-gray-600">
+                                            <span>Pág. {f.page ?? 'N/A'}</span>
+                                            <div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity print:hidden">
+                                                <button type="button" onClick={() => openVirtueFlawModal('flaw', f)} className="hover:text-white">Editar</button>
+                                                <button type="button" onClick={() => handleDeleteVirtueFlaw('flaw', f.id)} className="hover:text-red-400">Excluir</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </section>
+                </div>
+
+                {/* Ações */}
+                <div className="flex justify-end pt-4 gap-4 print:hidden">
+                    <button
+                        type="button"
+                        onClick={() => window.print()}
+                        className="bg-blue-accent text-gray-950 font-bold py-2 px-6 rounded-lg hover:bg-blue-accent/80 transition-all duration-300 text-center shadow-lg flex items-center justify-center gap-2"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5 4v3H4a2 2 0 00-2 2v6a2 2 0 002 2h12a2 2 0 002-2V9a2 2 0 00-2-2h-1V4a2 2 0 00-2-2H7a2 2 0 00-2 2zm8 0H7v3h6V4zm0 8H7v4h6v-4z" clipRule="evenodd" /></svg>
+                        Imprimir Ficha
+                    </button>
+
+                    <button
+                        type="submit"
+                        className="bg-purple-accent text-gray-950 font-bold py-2 px-6 rounded-lg hover:bg-purple-accent/80 transition-all duration-300 w-48 text-center shadow-lg disabled:opacity-60"
+                        disabled={saveStatus === 'saving'}
+                    >
+                        {saveStatus === 'saving' ? 'Salvando...' : saveStatus === 'saved' ? 'Salvo!' : 'Salvar Ficha'}
+                    </button>
+                </div>
+            </form>
+
+            {/* Modal Virtudes/Falhas */}
             {vfModal.open && (
-                <div className="fixed inset-0 bg-black/60 grid place-items-center p-4">
-                    <div className="bg-gray-900 rounded-lg p-4 md:p-6 w-full max-w-2xl">
-                        <h3 className="text-white text-xl font-semibold mb-3">{vfModal.type === 'virtue' ? 'Virtude' : 'Falha'}</h3>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                            <Field label="Nome" name="name" value={(vfModal.item as any)?.name ?? ''} onChange={e => setVfModal(m => ({ ...m, item: { ...(m.item ?? {} as any), name: e.target.value } }))}/>
-                            <Field label="Página" name="page" value={(vfModal.item as any)?.page ?? ''} onChange={e => setVfModal(m => ({ ...m, item: { ...(m.item ?? {} as any), page: e.target.value === '' ? null : Number(e.target.value) } }))} />
-                            <div className="flex items-center gap-2">
-                                <input id="is_major" type="checkbox" checked={Boolean((vfModal.item as any)?.is_major)} onChange={e => setVfModal(m => ({ ...m, item: { ...(m.item ?? {} as any), is_major: e.target.checked } }))}/>
-                                <label htmlFor="is_major" className="text-gray-300">Maior</label>
+                <div className="fixed inset-0 bg-black/75 flex items-center justify-center z-50 print:hidden" role="dialog" aria-modal="true" aria-labelledby="modal-vf">
+                    <div className="bg-gray-900 rounded-lg p-8 max-w-lg w-full shadow-2xl border border-gray-700">
+                        <h3 id="modal-vf" className="text-lg font-bold text-white mb-6">
+                            {(vfModal.item as any)?.id ? 'Editar' : 'Adicionar'} {vfModal.type === 'virtue' ? 'Virtude' : 'Defeito'}
+                        </h3>
+                        <div className="space-y-4">
+                            <div>
+                                <label className="text-sm font-medium text-gray-400 block mb-1">Nome</label>
+                                <input
+                                    type="text"
+                                    value={(vfModal.item as any)?.name ?? ''}
+                                    onChange={e => setVfModal(m => ({ ...m, item: { ...(m.item as any), name: e.target.value } }))}
+                                    className="w-full bg-gray-800 border-gray-700 rounded-md px-3 py-2 text-white"
+                                    required
+                                />
                             </div>
-                            <div className="md:col-span-2">
-                                <Field label="Descrição" name="description" value={(vfModal.item as any)?.description ?? ''} onChange={e => setVfModal(m => ({ ...m, item: { ...(m.item ?? {} as any), description: e.target.value } }))} type="textarea"/>
+                            <div>
+                                <label className="text-sm font-medium text-gray-400 block mb-1">Descrição</label>
+                                <textarea
+                                    rows={3}
+                                    value={(vfModal.item as any)?.description ?? ''}
+                                    onChange={e => setVfModal(m => ({ ...m, item: { ...(m.item as any), description: e.target.value } }))}
+                                    className="w-full bg-gray-800 border-gray-700 rounded-md px-3 py-2 text-white"
+                                />
                             </div>
-                        </div>
-                        <div className="mt-4 flex justify-end gap-2">
-                            <button onClick={saveVF} className="bg-green-accent text-gray-950 font-bold py-2 px-4 rounded-lg">Salvar</button>
-                            <button onClick={closeVF} className="bg-gray-700 text-white font-bold py-2 px-4 rounded-lg">Cancelar</button>
+                            <div className="flex gap-4">
+                                <div className="flex-grow">
+                                    <label className="text-sm font-medium text-gray-400 block mb-1">Página</label>
+                                    <input
+                                        type="number"
+                                        value={(vfModal.item as any)?.page ?? ''}
+                                        onChange={e => setVfModal(m => ({ ...m, item: { ...(m.item as any), page: e.target.value === '' ? null : Number(e.target.value) } }))}
+                                        className="w-full bg-gray-800 border-gray-700 rounded-md px-3 py-2 text-white"
+                                    />
+                                </div>
+                                <div className="flex items-end pb-2">
+                                    <label className="flex items-center gap-2 text-white cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={!!(vfModal.item as any)?.is_major}
+                                            onChange={e => setVfModal(m => ({ ...m, item: { ...(m.item as any), is_major: e.target.checked } }))}
+                                            className="h-4 w-4 rounded bg-gray-700 border-gray-600 text-purple-accent focus:ring-purple-accent"
+                                        />
+                                        É uma qualidade Grande?
+                                    </label>
+                                </div>
+                            </div>
+                            <div className="flex justify-end gap-4 pt-4">
+                                <button type="button" onClick={closeVF} className="py-2 px-4 rounded-lg bg-gray-700 hover:bg-gray-600 text-white font-semibold transition-colors">Cancelar</button>
+                                <button type="button" onClick={saveVF} className="py-2 px-4 rounded-lg bg-purple-accent hover:bg-purple-accent/80 text-white font-semibold transition-colors">Salvar</button>
+                            </div>
                         </div>
                     </div>
                 </div>
             )}
 
+            {/* Modal Magias */}
+            {isSpellModalOpen && (
+                <SpellModal
+                    spell={spellModalData}
+                    onClose={() => setIsSpellModalOpen(false)}
+                    onSave={(item) => handleSaveSpell(item)}
+                />
+            )}
+        </div>
+    );
+};
+
+/** =========================
+ *  Modal de Magia (front-only)
+ *  ========================= */
+const TECHNIQUES = ['Creo', 'Intellego', 'Muto', 'Perdo', 'Rego'] as const;
+const FORMS = ['Animal', 'Aquam', 'Auram', 'Corpus', 'Herbam', 'Ignem', 'Imaginem', 'Mentem', 'Terram', 'Vim'] as const;
+
+const SPELL_DEFAULTS: Omit<Spell, 'id'> = {
+    name: '',
+    technique: 'Creo',
+    form: 'Animal',
+    level: 5,
+    bonus: '',
+    range: 'Toque',
+    duration: 'Momento',
+    target: 'Individual',
+    exp: 0,
+    mastery: '',
+    notes: ''
+};
+
+const SpellModal: React.FC<{
+    spell: Spell | null;
+    onClose: () => void;
+    onSave: (item: Spell | Omit<Spell, 'id'> & { id?: string }) => void;
+}> = ({ spell, onClose, onSave }) => {
+    const [formData, setFormData] = useState<Omit<Spell, 'id'>>(() => spell ? { ...spell } : SPELL_DEFAULTS);
+    const isEditing = !!spell;
+
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
+        const { name, value, type } = e.target;
+        setFormData(prev => ({ ...prev, [name]: type === 'number' ? parseInt(value) || 0 : value }));
+    };
+
+    const handleSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!formData.name.trim()) {
+            alert("O nome da magia é obrigatório.");
+            return;
+        }
+        onSave({ ...formData, id: spell?.id });
+    };
+
+    const inputClass = "w-full bg-gray-800 border-gray-700 rounded-md px-3 py-2 text-white";
+    const labelClass = "text-sm font-medium text-gray-400 block mb-1";
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 print:hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title-spell">
+            <div className="bg-gray-900 rounded-lg p-8 max-w-2xl w-full shadow-2xl border border-gray-700 max-h-[90vh] overflow-y-auto">
+                <h3 id="modal-title-spell" className="text-lg font-bold text-white mb-6">{isEditing ? 'Editar' : 'Adicionar'} Magia</h3>
+                <form onSubmit={handleSubmit} className="space-y-4">
+                    <div>
+                        <label htmlFor="name" className={labelClass}>Nome da Magia</label>
+                        <input type="text" name="name" id="name" value={formData.name} onChange={handleChange} className={inputClass} required />
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div>
+                            <label htmlFor="technique" className={labelClass}>Técnica</label>
+                            <select name="technique" id="technique" value={formData.technique} onChange={handleChange} className={inputClass}>
+                                {TECHNIQUES.map(t => <option key={t} value={t}>{t}</option>)}
+                            </select>
+                        </div>
+                        <div>
+                            <label htmlFor="form" className={labelClass}>Forma</label>
+                            <select name="form" id="form" value={formData.form} onChange={handleChange} className={inputClass}>
+                                {FORMS.map(f => <option key={f} value={f}>{f}</option>)}
+                            </select>
+                        </div>
+                        <div>
+                            <label htmlFor="level" className={labelClass}>Nível</label>
+                            <input type="number" name="level" id="level" value={formData.level} onChange={handleChange} className={inputClass} />
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div><label htmlFor="range" className={labelClass}>Alcance</label><input type="text" name="range" id="range" value={formData.range} onChange={handleChange} className={inputClass} /></div>
+                        <div><label htmlFor="duration" className={labelClass}>Duração</label><input type="text" name="duration" id="duration" value={formData.duration} onChange={handleChange} className={inputClass} /></div>
+                        <div><label htmlFor="target" className={labelClass}>Alvo</label><input type="text" name="target" id="target" value={formData.target} onChange={handleChange} className={inputClass} /></div>
+                        <div><label htmlFor="bonus" className={labelClass}>Bônus</label><input type="text" name="bonus" id="bonus" value={formData.bonus} onChange={handleChange} className={inputClass} /></div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div><label htmlFor="mastery" className={labelClass}>Maestria</label><input type="text" name="mastery" id="mastery" value={formData.mastery} onChange={handleChange} className={inputClass} /></div>
+                        <div><label htmlFor="exp" className={labelClass}>Exp</label><input type="number" name="exp" id="exp" value={formData.exp} onChange={handleChange} className={inputClass} /></div>
+                    </div>
+                    <div><label htmlFor="notes" className={labelClass}>Notas</label><textarea name="notes" id="notes" value={formData.notes} onChange={handleChange} rows={3} className={inputClass} /></div>
+                    <div className="flex justify-end gap-4 pt-4">
+                        <button type="button" onClick={onClose} className="py-2 px-4 rounded-lg bg-gray-700 hover:bg-gray-600 text-white font-semibold transition-colors">Cancelar</button>
+                        <button type="submit" className="py-2 px-4 rounded-lg bg-purple-accent hover:bg-purple-accent/80 text-white font-semibold transition-colors">Salvar</button>
+                    </div>
+                </form>
+            </div>
         </div>
     );
 };

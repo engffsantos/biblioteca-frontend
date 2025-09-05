@@ -1,254 +1,253 @@
 // src/services/api.ts
-// Camada REST com:
-// - Seleção de base URL por ambiente (Vercel, local, override via ENV/Window)
-// - Timeout (AbortController), retries com backoff + jitter
-// - Tratamento de erros padronizado (ApiError)
-// - Modo DEBUG com checklist de "Failed to fetch" (CORS/HTTPS/DNS/Serverless/etc.)
+type AnyObject = Record<string, any>
 
-type AnyObject = Record<string, any>;
+const PROD_HOST = 'https://biblioteca-backend-nine-beta.vercel.app'
+const DEFAULT_API = `${PROD_HOST}/api`
 
-// ===== Ajuste o fallback de produção para o SEU backend =====
-const PROD_API_FALLBACK = 'https://biblioteca-backend-nine-beta.vercel.app/api/';
+let _baseOverride: string | null =
+    (typeof window !== 'undefined' && (window as any).__API_BASE_URL) || null
 
-// Em prod (Vercel) o cold start pode demorar um pouco → timeout um pouco maior
-const DEFAULT_TIMEOUT_MS =
-    typeof window !== 'undefined' && location.hostname.endsWith('vercel.app') ? 20000 : 15000;
+let _debug =
+    (typeof import.meta !== 'undefined' && (import.meta as any)?.env?.VITE_API_DEBUG === 'true') ||
+    (typeof window !== 'undefined' && (window as any).__API_DEBUG === true)
 
-const DEFAULT_RETRIES = 2;
-
-// ================== Debug flags via build ou runtime ==================
-const debugFlag =
-    (typeof window !== 'undefined' && (window as any).__API_DEBUG === true) ||
-    import.meta?.env?.VITE_API_DEBUG === 'true';
-
-let __DEBUG = !!debugFlag;
-let __BASE_OVERRIDE: string | null =
-    (typeof window !== 'undefined' && (window as any).__API_BASE_URL) || null;
-
-export function setDebug(v: boolean) {
-    __DEBUG = v;
-}
-export function setBaseURL(url: string) {
-    __BASE_OVERRIDE = url;
+export function setDebug(v: boolean) { _debug = v }
+export function setBaseURL(url: string) { _baseOverride = strip(url) }
+export function getBaseURL(): string {
+    if (_baseOverride) return withApiPrefix(_baseOverride)
+    const env =
+        (typeof import.meta !== 'undefined' && (import.meta as any)?.env?.VITE_API_URL) ||
+        (typeof import.meta !== 'undefined' && (import.meta as any)?.env?.VITE_BACKEND_URL) ||
+        (typeof import.meta !== 'undefined' && (import.meta as any)?.env?.VITE_API_BASE)
+    if (env) return withApiPrefix(String(env))
+    return DEFAULT_API
 }
 
-function log(...args: any[]) {
-    if (__DEBUG) console.log('[API]', ...args);
+function strip(u: string) { return u.endsWith('/') ? u.slice(0, -1) : u }
+function withApiPrefix(u: string) {
+    const s = strip(u)
+    return s.toLowerCase().endsWith('/api') ? s : `${s}/api`
 }
-function logErr(...args: any[]) {
-    console.error('[API]', ...args);
-}
+function j(obj: any) { try { return JSON.parse(JSON.stringify(obj)) } catch { return obj } }
 
-// ================== Base URL ==================
-function getBaseURL(): string {
-    // 1) Override em runtime (útil para depuração sem rebuild)
-    if (__BASE_OVERRIDE) return stripSlash(__BASE_OVERRIDE);
-
-    // 2) ENV do Vite (defina VITE_API_BASE no frontend para alternar ambientes)
-    const fromEnv = import.meta?.env?.VITE_API_BASE?.toString().trim();
-    if (fromEnv) return stripSlash(fromEnv);
-
-    // 3) Produção Vercel → aponta para o backend deployado
-    if (typeof window !== 'undefined' && location.hostname.endsWith('vercel.app')) {
-        return PROD_API_FALLBACK;
-    }
-
-    // 4) Local
-    return 'http://localhost:3000/api';
-}
-
-function stripSlash(u: string) {
-    return u.endsWith('/') ? u.slice(0, -1) : u;
-}
-
-// ================== Núcleo de requests ==================
 class ApiError extends Error {
-    status?: number;
-    url?: string;
-    original?: unknown;
-
-    constructor(message: string, status?: number, url?: string, original?: unknown) {
-        super(message);
-        this.name = 'ApiError';
-        this.status = status;
-        this.url = url;
-        this.original = original;
+    constructor(
+        message: string,
+        public status?: number,
+        public url?: string,
+        public original?: unknown
+    ) {
+        super(message)
+        this.name = 'ApiError'
     }
 }
 
-function redacted(value: any) {
-    try {
-        return JSON.parse(JSON.stringify(value));
-    } catch {
-        return value;
-    }
+async function parseJson(resp: Response) {
+    const text = await resp.text()
+    try { return JSON.parse(text) } catch { return text || null }
 }
 
-function sleep(ms: number) {
-    return new Promise((r) => setTimeout(r, ms));
+function extractMsg(payload: any) {
+    if (!payload || typeof payload !== 'object') return null
+    if (typeof payload.error === 'string') return payload.error
+    if (typeof payload.message === 'string') return payload.message
+    if (Array.isArray(payload.details)) return payload.details.join(' | ')
+    return null
 }
 
-function backoff(attempt: number) {
-    // expo + jitter
-    return 200 * Math.pow(2, attempt) + Math.floor(Math.random() * 200);
-}
+function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)) }
+function backoff(attempt: number) { return 200 * Math.pow(2, attempt) + Math.floor(Math.random() * 200) }
 
-async function safeJson(resp: Response) {
-    const txt = await resp.text();
-    try {
-        return JSON.parse(txt);
-    } catch {
-        return txt || null;
-    }
-}
-
-function extractServerMessage(payload: unknown): string | null {
-    try {
-        if (payload && typeof payload === 'object') {
-            const p = payload as any;
-            if (typeof p.error === 'string') return p.error;
-            if (typeof p.message === 'string') return p.message;
-            if (Array.isArray(p.details)) return p.details.join(' | ');
-        }
-    } catch {}
-    return null;
-}
-
-async function coreRequest<T>(
-    method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+async function request<T>(
+    method: 'GET'|'POST'|'PUT'|'DELETE',
     path: string,
     body?: AnyObject,
-    opts?: { timeoutMs?: number; headers?: AnyObject; retries?: number }
+    opts?: { timeoutMs?: number; retries?: number; headers?: AnyObject }
 ): Promise<T> {
-    const base = getBaseURL();
-    const url = `${base}${path.startsWith('/') ? path : `/${path}`}`;
-    const headers: AnyObject = { 'Content-Type': 'application/json', ...(opts?.headers || {}) };
-    const timeoutMs = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    const retries = Math.max(0, opts?.retries ?? DEFAULT_RETRIES);
+    const base = getBaseURL()
+    const url = `${base}${path.startsWith('/') ? path : `/${path}`}`
+    const timeoutMs = opts?.timeoutMs ?? 15000
+    const retries = Math.max(0, opts?.retries ?? 1)
+    const headers: AnyObject = { 'Content-Type': 'application/json', ...(opts?.headers || {}) }
 
-    let lastErr: unknown;
+    let lastErr: any
 
     for (let attempt = 0; attempt <= retries; attempt++) {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), timeoutMs);
-        const group = __DEBUG ? console.groupCollapsed : null;
-        if (group) console.groupCollapsed(`%c${method} ${url} [${attempt + 1}/${retries + 1}]`, 'color:#888');
+        const ctrl = new AbortController()
+        const tm = setTimeout(() => ctrl.abort(), timeoutMs)
+
+        if (_debug) {
+            const args = body && method !== 'GET' && method !== 'DELETE' ? [method, url, j(body)] : [method, url]
+            console.log('[API]', ...args)
+        }
 
         try {
-            log('→ Request', {
-                url,
-                method,
-                headers,
-                body: method !== 'GET' && method !== 'DELETE' ? redacted(body) : undefined,
-            });
-
             const resp = await fetch(url, {
                 method,
                 headers,
-                body: method !== 'GET' && method !== 'DELETE' ? JSON.stringify(body ?? {}) : undefined,
-                signal: controller.signal,
-                // credentials: 'include', // habilite se usar cookies/sessão
-            });
-
-            clearTimeout(timer);
+                body: method === 'GET' || method === 'DELETE' ? undefined : JSON.stringify(body ?? {}),
+                signal: ctrl.signal,
+            })
+            clearTimeout(tm)
 
             if (!resp.ok) {
-                const payload = await safeJson(resp);
-                const msg = extractServerMessage(payload) || `HTTP ${resp.status}`;
-                throw new ApiError(msg, resp.status, url, payload);
+                const payload = await parseJson(resp)
+                const msg = extractMsg(payload) || `HTTP ${resp.status}`
+                throw new ApiError(msg, resp.status, url, payload)
             }
 
-            const data = (await safeJson(resp)) as T;
-            log('← OK', data);
-            if (group) console.groupEnd?.();
-            return data;
+            const data = (await parseJson(resp)) as T
+            if (_debug) console.log('[API] OK', method, url)
+            return data
         } catch (err: any) {
-            clearTimeout(timer);
-            lastErr = err;
+            clearTimeout(tm)
+            lastErr = err
+            const isAbort = err?.name === 'AbortError'
+            const isNetwork = err instanceof TypeError && String(err.message || '').includes('Failed to fetch')
 
-            const isAbort = err?.name === 'AbortError';
-            const isNetwork = err instanceof TypeError && String(err.message || '').includes('Failed to fetch');
-
-            if (group) {
-                console.warn('! Falhou', err);
-                console.groupEnd?.();
+            if (attempt < retries && (isAbort || isNetwork)) {
+                await sleep(backoff(attempt))
+                continue
             }
 
-            // No último attempt, imprime um checklist para ajudar
-            if (attempt === retries) {
-                if (isAbort) {
-                    logErr('[API][Timeout]', { url, timeoutMs });
-                } else if (isNetwork) {
-                    logErr('[API][Diagnóstico rápido] Possíveis causas para "Failed to fetch":');
-                    logErr('  • CORS no backend (ALLOWED_ORIGINS não inclui o domínio do front)');
-                    logErr('  • URL incorreta (verifique getBaseURL / VITE_API_BASE)');
-                    logErr('  • HTTP vs HTTPS (mixed content)');
-                    logErr('  • DNS/SSL/Certificado inválido no host');
-                    logErr('  • Serverless sem export default app (Vercel) ou cold start lento');
-                    logErr('  • Bloqueio por adblock/extensão (tente aba anônima)');
-                    logErr('  • Resposta muito lenta (aumente timeoutMs)');
-                } else {
-                    logErr('[API][Erro final]', err);
+            if (_debug) {
+                console.error('[API] FAIL', method, url, err)
+                if (isNetwork) {
+                    console.error('[API] Diagnóstico rápido (Failed to fetch):')
+                    console.error(' • CORS/ALLOWED_ORIGINS')
+                    console.error(' • URL incorreta / http vs https')
+                    console.error(' • DNS/SSL/Certificado')
+                    console.error(' • Serverless cold start')
+                    console.error(' • Adblock/extensões')
+                    console.error(' • Timeout curto')
                 }
             }
 
-            // Tenta novamente se for abort/network e ainda houver retries
-            if ((isAbort || isNetwork) && attempt < retries) {
-                await sleep(backoff(attempt));
-                continue;
-            }
-
             throw new ApiError(
-                isAbort ? `Tempo esgotado após ${timeoutMs}ms: ${url}` : `Falha de rede: ${String(err?.message || err)}`,
+                isAbort ? `Tempo esgotado após ${timeoutMs}ms: ${url}` : String(err?.message || err),
                 undefined,
                 url,
                 err
-            );
+            )
         }
     }
 
-    // Teoricamente não chega aqui, mas por segurança:
-    throw new ApiError(String(lastErr?.message || lastErr || 'Erro desconhecido'));
+    throw new ApiError(String(lastErr?.message || lastErr || 'Erro desconhecido'))
 }
 
-// ================== API pública ==================
-export const api = {
-    // Library
-    list: () => coreRequest<any[]>('GET', '/library'),
-    get: (id: string) => coreRequest<any>('GET', `/library/${id}`),
-    create: (payload: AnyObject) => coreRequest<any>('POST', '/library', payload),
-    update: (id: string, payload: AnyObject) => coreRequest<any>('PUT', `/library/${id}`, payload),
-    remove: (id: string) => coreRequest<void>('DELETE', `/library/${id}`),
+/* ========= Normalização para o BACKEND (conforme /api/library) =========
+   - Backend espera: ability, category, description (e level/quality, etc.)
+   - Nosso front usa: subject, notes (e outros que o backend não persiste).
+   Referência backend: routes/library.js (INSERT/UPDATE) :contentReference[oaicite:2]{index=2}
+*/
+function toBackendPayload(input: AnyObject): AnyObject {
+    if (!input) return {}
+    const type = input.type
 
-    // Akin
-    getAkin: () => coreRequest<any>('GET', '/akin'),
-    saveAkinProfile: (profile: AnyObject) => coreRequest<any>('PUT', '/akin', profile),
-    addAbility: (payload: AnyObject) => coreRequest<any>('POST', '/akin/abilities', payload),
-    updateAbility: (id: string, payload: AnyObject) => coreRequest<any>('PUT', `/akin/abilities/${id}`, payload),
-    deleteAbility: (id: string) => coreRequest<void>('DELETE', `/akin/abilities/${id}`),
-    addVirtue: (payload: AnyObject) => coreRequest<any>('POST', '/akin/virtues', payload),
-    updateVirtue: (id: string, payload: AnyObject) => coreRequest<any>('PUT', `/akin/virtues/${id}`, payload),
-    deleteVirtue: (id: string) => coreRequest<void>('DELETE', `/akin/virtues/${id}`),
-    addFlaw: (payload: AnyObject) => coreRequest<any>('POST', '/akin/flaws', payload),
-    updateFlaw: (id: string, payload: AnyObject) => coreRequest<any>('PUT', `/akin/flaws/${id}`, payload),
-    deleteFlaw: (id: string) => coreRequest<void>('DELETE', `/akin/flaws/${id}`),
+    // mapeamento comum
+    const base = {
+        type,
+        title: input.title,
+        author: input.author ?? null,
+        description: input.notes ?? input.description ?? null, // description ← notes
+    }
+
+    if (type === 'Lab Text') {
+        return {
+            ...base,
+            ability: null,                           // Lab Text não usa ability
+            category: input.category ?? null,        // category mantida
+            level: input.level ?? null,
+            quality: input.quality ?? null,          // pode ir null
+            // effect/language/labTotal não existem no schema atual
+        }
+    }
+
+    // Summae/Tractatus
+    return {
+        ...base,
+        ability: input.subject ?? input.ability ?? null, // ability ← subject
+        category: null,
+        level: input.level ?? null,
+        quality: input.quality ?? null,
+    }
+}
+
+/* ========= Normalização de resposta do BACKEND → UI =========
+   - Para a UI continuar exibindo `notes` e `subject` nas páginas
+     que já usam esses nomes (ItemDetailPage/LibraryPage).
+*/
+function fromBackendItem(row: AnyObject): AnyObject {
+    if (!row) return row
+    const type = row.type
+    const base = {
+        ...row,
+        notes: row.description ?? null, // UI lê notes
+    }
+    if (type === 'Lab Text') {
+        return base // Lab Text não usa subject; mantemos category já vinda do backend
+    }
+    return {
+        ...base,
+        subject: row.ability ?? null,   // UI lê subject
+    }
+}
+
+export const api = {
+    // Biblioteca
+    list: async () => {
+        const rows = await request<any[]>('GET', '/library')
+        return Array.isArray(rows) ? rows.map(fromBackendItem) : []
+    },
+    get: async (id: string) => {
+        const row = await request<any>('GET', `/library/${id}`)
+        return fromBackendItem(row)
+    },
+    create: async (payload: AnyObject) => {
+        const body = toBackendPayload(payload)
+        const created = await request<any>('POST', '/library', body)
+        return fromBackendItem(created)
+    },
+    update: async (id: string, payload: AnyObject) => {
+        const body = toBackendPayload(payload)
+        const updated = await request<any>('PUT', `/library/${id}`, body)
+        return fromBackendItem(updated)
+    },
+    remove: (id: string) => request<void>('DELETE', `/library/${id}`),
+
+    // Akin (namespace)
+    akin: {
+        get: () => request<any>('GET', '/akin'),
+        upsert: (profile: AnyObject) => request<any>('PUT', '/akin', profile),
+
+        createAbility: (p: AnyObject) => request<any>('POST', '/akin/abilities', p),
+        updateAbility: (id: string, p: AnyObject) => request<any>('PUT', `/akin/abilities/${id}`, p),
+        deleteAbility: (id: string) => request<void>('DELETE', `/akin/abilities/${id}`),
+
+        createVirtue: (p: AnyObject) => request<any>('POST', '/akin/virtues', p),
+        updateVirtue: (id: string, p: AnyObject) => request<any>('PUT', `/akin/virtues/${id}`, p),
+        deleteVirtue: (id: string) => request<void>('DELETE', `/akin/virtues/${id}`),
+
+        createFlaw: (p: AnyObject) => request<any>('POST', '/akin/flaws', p),
+        updateFlaw: (id: string, p: AnyObject) => request<any>('PUT', `/akin/flaws/${id}`, p),
+        deleteFlaw: (id: string) => request<void>('DELETE', `/akin/flaws/${id}`),
+    },
+
+    // Akin (métodos "flat" para compat)
+    getAkin: () => request<any>('GET', '/akin'),
+    saveAkinProfile: (profile: AnyObject) => request<any>('PUT', '/akin', profile),
+    addAbility: (p: AnyObject) => request<any>('POST', '/akin/abilities', p),
+    updateAbility: (id: string, p: AnyObject) => request<any>('PUT', `/akin/abilities/${id}`, p),
+    deleteAbility: (id: string) => request<void>('DELETE', `/akin/abilities/${id}`),
+    addVirtue: (p: AnyObject) => request<any>('POST', '/akin/virtues', p),
+    updateVirtue: (id: string, p: AnyObject) => request<any>('PUT', `/akin/virtues/${id}`, p),
+    deleteVirtue: (id: string) => request<void>('DELETE', `/akin/virtues/${id}`),
+    addFlaw: (p: AnyObject) => request<any>('POST', '/akin/flaws', p),
+    updateFlaw: (id: string, p: AnyObject) => request<any>('PUT', `/akin/flaws/${id}`, p),
+    deleteFlaw: (id: string) => request<void>('DELETE', `/akin/flaws/${id}`),
 
     // Debug
-    pingDb: () => coreRequest<{ ok: boolean }>('GET', '/_debug/ping-db', undefined, { timeoutMs: 8000 }),
-};
+    pingDb: () => request<{ ok: boolean }>('GET', '/_debug/ping-db', undefined, { timeoutMs: 8000 }),
+}
 
-export default api;
-
-// ================== Dicas rápidas ==================
-//
-// 1) Ativar logs de depuração:
-//      window.__API_DEBUG = true         // runtime
-//   ou setDebug(true)                    // via código
-//   ou VITE_API_DEBUG=true               // build
-//
-// 2) Forçar a base em produção (sem rebuild):
-//      window.__API_BASE_URL = 'https://SEU-BACKEND.vercel.app/api'
-//   ou setBaseURL('https://.../api')
-//
-// 3) Em produção, garanta no backend (Vercel) a ENV:
-//    ALLOWED_ORIGINS = https://SEU-FRONT.vercel.app, http://localhost:5173
+export default api

@@ -1,5 +1,5 @@
 
-import { Database, ItemType, LabTextCategory } from '../types';
+import { Database, ItemType, LabTextCategory } from '../types.ts';
 
 export const initialData: Database = {
   library: [

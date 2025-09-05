@@ -1,10 +1,10 @@
 
 import React, { useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import useLocalStorage from '../hooks/useLocalStorage';
-import { Database, LibraryItem, ItemType, LabTextCategory, Summae, Tractatus, LabText } from '../types';
-import { initialData } from '../data/initialData';
-import Badge from '../components/Badge';
+import useLocalStorage from '../hooks/useLocalStorage.ts';
+import { Database, LibraryItem, ItemType, LabTextCategory, Summae, Tractatus, LabText } from '../types.ts';
+import { initialData } from '../data/initialData.ts';
+import Badge from '../components/Badge.tsx';
 
 const typeColors: Record<ItemType, 'blue' | 'green' | 'purple'> = {
   [ItemType.Summae]: 'blue',

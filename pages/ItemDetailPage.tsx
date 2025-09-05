@@ -1,15 +1,11 @@
 // src/pages/ItemDetailPage.tsx
-// Detalhes por ID, consultando o backend via hook useLibraryItem.
+// Detalhes por ID. (Apenas padronizei imports sem .ts/.tsx nos caminhos)
 
 import React from 'react';
 import { useParams, Link, Navigate } from 'react-router-dom';
 
-// ✅ Hook vem de useApi
 import { useLibraryItem } from '../hooks/useApi';
-
-// ✅ Enums/tipos vêm do módulo de tipos (fonte única de verdade)
 import { ItemType, LabTextCategory } from '../types';
-
 import Badge from '../components/Badge';
 
 const typeColors: Record<ItemType, 'blue' | 'green' | 'purple'> = {
@@ -17,7 +13,6 @@ const typeColors: Record<ItemType, 'blue' | 'green' | 'purple'> = {
     [ItemType.Tractatus]: 'green',
     [ItemType.LabText]: 'purple',
 };
-
 const categoryColors: Record<LabTextCategory, 'orange' | 'red' | 'purple'> = {
     [LabTextCategory.Magia]: 'red',
     [LabTextCategory.ItemEncantado]: 'orange',
@@ -33,7 +28,6 @@ const DetailField: React.FC<{ label: string; value?: string | number | null }> =
 
 const ItemDetailPage: React.FC = () => {
     const { id } = useParams<{ id: string }>();
-    // ✅ Passe apenas string | undefined (não passe null)
     const { item, loading, error } = useLibraryItem(id);
 
     if (!id) return <Navigate to="/library" replace />;

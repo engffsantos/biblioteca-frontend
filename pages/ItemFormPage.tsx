@@ -1,64 +1,47 @@
 // src/pages/ItemFormPage.tsx
-// Formulário para criar/editar itens da biblioteca via API.
-// - Em "novo": POST /api/library
-// - Em "editar": PUT /api/library/:id
-// Tipos importados de ../types (certo). Hooks do backend de ../hooks/useApi.
+// Formulário de criação/edição. >>> Correção crucial:
+// - Não interromper o render em modo "novo" (sem id). O hook ainda é chamado,
+//   mas só mostramos loading/erro quando realmente estamos editando.
 
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-
-// ✅ Hooks (estado/CRUD) vêm do módulo de hooks
 import { useLibrary, useLibraryItem } from '../hooks/useApi';
-
-// ✅ Tipos/enums vêm do módulo de tipos (origem correta)
 import { ItemType, LabTextCategory, type LibraryItem, type Summae, type Tractatus, type LabText } from '../types';
 
 const ItemFormPage: React.FC = () => {
     const { id } = useParams<{ id: string }>();
     const isEditing = Boolean(id);
 
-    // Busca item no backend quando editando
-    const { item, loading: loadingItem, error: errorItem } = useLibraryItem(id ?? null);
+    // >>> Passa o id (string | undefined). O hook não deve "errar" sem id.
+    const { item, loading: loadingItem, error: errorItem } = useLibraryItem(id as string | undefined);
 
-    // Ações CRUD
     const { addItem, updateItem } = useLibrary();
     const navigate = useNavigate();
 
-    // Estado do form cobre todos os campos possíveis
     const [formData, setFormData] = useState<Partial<LibraryItem>>({
         type: ItemType.Tractatus,
         title: '',
         author: '',
         language: 'Latim',
         notes: '',
-        // Summae/Tractatus
         subject: '',
         quality: 5,
         level: 5,
-        // Lab Text
         category: LabTextCategory.Magia,
         effect: '',
         labTotal: 10,
-    } as Partial<LibraryItem>); // 👈 garante compatibilidade com o discriminated union
+    } as Partial<LibraryItem>);
 
-    // Preenche com dados do item quando editando
     useEffect(() => {
-        if (isEditing && item) {
-            setFormData(item as Partial<LibraryItem>);
-        }
+        if (isEditing && item) setFormData(item as Partial<LibraryItem>);
     }, [isEditing, item]);
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
         const { name, value } = e.target;
         const numeric = name === 'level' || name === 'quality' || name === 'labTotal';
-        // 👇 Cast localizado para satisfazer o discriminated union do estado
-        setFormData(prev => ({
-            ...(prev as any),
-            [name]: numeric ? Number(value) : value,
-        }) as Partial<LibraryItem>);
+        setFormData(prev => ({ ...(prev as any), [name]: numeric ? Number(value) : value }) as Partial<LibraryItem>);
     };
 
-    // Envia somente os campos relevantes para o tipo (boa prática p/ manter o payload limpo)
     const getCleanData = (): Partial<LibraryItem> => {
         const common = {
             type: formData.type,
@@ -67,29 +50,13 @@ const ItemFormPage: React.FC = () => {
             language: formData.language,
             notes: formData.notes,
         };
-
         switch (formData.type) {
             case ItemType.Summae:
-                return {
-                    ...common,
-                    subject: formData.subject,
-                    level: formData.level,
-                    quality: formData.quality,
-                } as Partial<Summae>;
+                return { ...common, subject: formData.subject, level: formData.level, quality: formData.quality } as Partial<Summae>;
             case ItemType.Tractatus:
-                return {
-                    ...common,
-                    subject: formData.subject,
-                    quality: formData.quality,
-                } as Partial<Tractatus>;
+                return { ...common, subject: formData.subject, quality: formData.quality } as Partial<Tractatus>;
             case ItemType.LabText:
-                return {
-                    ...common,
-                    category: formData.category,
-                    effect: formData.effect,
-                    level: formData.level,
-                    labTotal: formData.labTotal,
-                } as Partial<LabText>;
+                return { ...common, category: formData.category, effect: formData.effect, level: formData.level, labTotal: formData.labTotal } as Partial<LabText>;
             default:
                 return common as Partial<LibraryItem>;
         }
@@ -97,11 +64,9 @@ const ItemFormPage: React.FC = () => {
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!formData.title) {
-            alert('O título é obrigatório.');
-            return;
-        }
+        if (!formData.title) { alert('O título é obrigatório.'); return; }
         const payload = getCleanData();
+
         if (isEditing && id) {
             await updateItem(id, payload);   // PUT /api/library/:id
         } else {
@@ -114,8 +79,9 @@ const ItemFormPage: React.FC = () => {
     const labelClass = "text-sm font-medium text-gray-300";
     const inputClass = "bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-accent";
 
-    if (loadingItem) return <div className="p-6 text-white">Carregando...</div>;
-    if (errorItem)   return <div className="p-6 text-red-400">Erro: {errorItem}</div>;
+    // >>> Só bloqueia a tela se for EDIÇÃO e ainda estiver carregando/erro.
+    if (isEditing && loadingItem) return <div className="p-6 text-white">Carregando...</div>;
+    if (isEditing && errorItem)   return <div className="p-6 text-red-400">Erro: {errorItem}</div>;
 
     return (
         <div className="container mx-auto p-4 sm:p-6 lg:p-8">
@@ -158,7 +124,8 @@ const ItemFormPage: React.FC = () => {
 
                     {formData.type === ItemType.LabText && (
                         <>
-                            <div className={formGroupClass}><label className={labelClass}>Categoria</label>
+                            <div className={formGroupClass}>
+                                <label className={labelClass}>Categoria</label>
                                 <select name="category" value={formData.category || LabTextCategory.Magia} onChange={handleChange} className={inputClass}>
                                     {Object.values(LabTextCategory).map(c => <option key={c} value={c}>{c}</option>)}
                                 </select>
