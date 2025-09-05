@@ -141,9 +141,9 @@ const LibraryPage: React.FC = () => {
     // ESTADOS DE CARREGAMENTO/ERRO
     if (loading) {
         return (
-            <div className="container mx-auto p-4 sm:p-6 lg:p-8">
+            <div className="container mx-auto p-4 sm:p-6 lg:p-8 print:p-0 print:bg-white">
                 <div className="flex justify-center items-center min-h-64">
-                    <div className="text-white text-lg">Carregando...</div>
+                    <div className="text-white text-lg print:text-black">Carregando...</div>
                 </div>
             </div>
         );
@@ -152,10 +152,10 @@ const LibraryPage: React.FC = () => {
     if (error) {
         // Mostra bloco de erro amigável
         return (
-            <div className="container mx-auto p-4 sm:p-6 lg:p-8">
-                <div className="bg-red-900 border border-red-700 rounded-lg p-4">
-                    <h2 className="text-red-300 text-lg font-semibold mb-2">Erro</h2>
-                    <p className="text-red-200">{String(error)}</p>
+            <div className="container mx-auto p-4 sm:p-6 lg:p-8 print:p-0 print:bg-white">
+                <div className="bg-red-900 border border-red-700 rounded-lg p-4 print:bg-white print:border-red-300">
+                    <h2 className="text-red-300 text-lg font-semibold mb-2 print:text-red-700">Erro</h2>
+                    <p className="text-red-200 print:text-red-600">{String(error)}</p>
                     {/* Mantém acesso ao Diagnóstico para testes de conexão/CRUD */}
                     <p className="mt-3">
                         <Link to="/diagnostico" className="text-blue-accent underline hover:no-underline">
@@ -173,14 +173,14 @@ const LibraryPage: React.FC = () => {
             {filteredItems.map((item) => (
                 <div
                     key={item.id}
-                    className="bg-gray-900 rounded-lg shadow-lg overflow-hidden flex flex-col justify-between transition-transform hover:scale-105 duration-300 print:shadow-none print:border print:border-gray-300 print:break-inside-avoid"
+                    className="bg-gray-900 rounded-lg shadow-lg overflow-hidden flex flex-col justify-between transition-transform hover:scale-105 duration-300 print:shadow-none print:border print:border-gray-300 print:break-inside-avoid print:bg-white"
                 >
                     <div className="p-6">
                         <div className="flex justify-between items-start mb-2">
                             <h2 className="text-xl font-bold text-white pr-2 print:text-black">{item.title}</h2>
 
                             {/* Badges de tipo (e categoria se for LabText) */}
-                            <div className="flex flex-col items-end gap-2 flex-shrink-0 ml-2">
+                            <div className="flex flex-col items-end gap-2 flex-shrink-0 ml-2 print:text-black">
                                 <Badge text={String(item.type)} color={typeColors[item.type as ItemType]} />
                                 {isLabText(item) && item.category && (
                                     <Badge text={String(item.category)} color={categoryColors[item.category as LabTextCategory]} />
@@ -256,12 +256,12 @@ const LibraryPage: React.FC = () => {
                 </thead>
                 <tbody>
                 {filteredItems.map((item) => (
-                    <tr key={item.id} className="bg-gray-900 border-b border-gray-800 hover:bg-gray-800/50 print:border-gray-300">
+                    <tr key={item.id} className="bg-gray-900 border-b border-gray-800 hover:bg-gray-800/50 print:border-gray-300 print:bg-white">
                         <td className="px-6 py-4 font-medium text-white print:text-black">
                             {item.title}
                             <span className="text-gray-400 block text-xs print:text-gray-600">por {(item as any).author || '—'}</span>
                         </td>
-                        <td className="px-6 py-4">
+                        <td className="px-6 py-4 print:text-black">
                             <Badge text={String(item.type)} color={typeColors[item.type as ItemType]} />
                             {isLabText(item) && item.category && (
                                 <Badge text={String(item.category)} color={categoryColors[item.category as LabTextCategory]} />
@@ -289,7 +289,7 @@ const LibraryPage: React.FC = () => {
 
                 {filteredItems.length === 0 && (
                     <tr>
-                        <td colSpan={6} className="px-6 py-8 text-center text-gray-500">
+                        <td colSpan={6} className="px-6 py-8 text-center text-gray-500 print:text-black">
                             Nenhum item encontrado. Ajuste os filtros ou adicione um novo item.
                         </td>
                     </tr>
@@ -301,7 +301,7 @@ const LibraryPage: React.FC = () => {
 
     // JSX principal
     return (
-        <div className="container mx-auto p-4 sm:p-6 lg:p-8 print:p-0">
+        <div className="container mx-auto p-4 sm:p-6 lg:p-8 print:p-0 print:bg-white print:text-black">
             {/* Cabeçalho com título, Diagnóstico, Imprimir e Novo Item */}
             <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
                 <h1 className="text-3xl font-bold text-white print:text-black">Acervo da Biblioteca</h1>

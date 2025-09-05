@@ -1,7 +1,126 @@
-// src/pages/AkinPage.tsx
+// src/pages/akin.tsx
 import React, { useEffect, useMemo, useState } from 'react';
-import { api as apiSvc } from '../services/api';
 import Badge from '../components/Badge';
+import {api as apiSvc} from '../services/api';
+/** =========================
+ *  Config de API (client interno e resiliente)
+ *  ========================= */
+// Utilitário: tenta caminhos em ordem, tratando 404/405 como "tente o próximo"
+async function tryPaths<T>(fns: Array<() => Promise<T>>): Promise<T> {
+    let lastErr: any = null;
+    for (const fn of fns) {
+        try { return await fn(); } catch (err: any) {
+            // Se for 404/405/Not Found/Method Not Allowed, tenta o próximo caminho
+            const msg = String(err?.message || err);
+            if (msg.includes('404') || msg.includes('Not Found') || msg.includes('405') || msg.includes('Method Not Allowed')) {
+                lastErr = err;
+                continue;
+            }
+            // outros erros: derruba na hora (ex.: 500, CORS, etc.)
+            throw err;
+        }
+    }
+    throw lastErr || new Error('Nenhum endpoint compatível encontrado para AKIN.');
+}
+
+function ns() {
+    // Se seu services/api já expõe um namespace estável (apiSvc.akin), mantemos;
+    // por baixo, ele deve expor métodos genéricos: get(path), post(path, body), put(path, body), del(path)
+    const hasNs = !!(apiSvc as any).akin;
+    const http = hasNs ? (apiSvc as any).akin : (apiSvc as any);
+
+    const get = () =>
+        tryPaths([
+            () => http.get('/akin'),
+            () => http.get('/akin/profile'),
+        ]);
+
+    const upsert = (p: any) =>
+        tryPaths([
+            () => http.post('/akin', p),
+            () => http.put('/akin', p),
+            () => http.post('/akin/profile', p),
+            () => http.put('/akin/profile', p),
+        ]);
+
+    // Abilities / Virtues / Flaws: mantemos os caminhos padrão.
+    // Caso seu backend tenha mudado o prefixo (ex.: /akin/profile/abilities),
+    // replique a mesma ideia do tryPaths aqui também.
+    const createAbility = (b: any) => http.post('/akin/abilities', b);
+    const updateAbility = (id: string, b: any) => http.put(`/akin/abilities/${id}`, b);
+    const deleteAbility = (id: string) => http.del(`/akin/abilities/${id}`);
+
+    const createVirtue = (b: any) => http.post('/akin/virtues', b);
+    const updateVirtue = (id: string, b: any) => http.put(`/akin/virtues/${id}`, b);
+    const deleteVirtue = (id: string) => http.del(`/akin/virtues/${id}`);
+
+    const createFlaw = (b: any) => http.post('/akin/flaws', b);
+    const updateFlaw = (id: string, b: any) => http.put(`/akin/flaws/${id}`, b);
+    const deleteFlaw = (id: string) => http.del(`/akin/flaws/${id}`);
+
+    return { get, upsert, createAbility, updateAbility, deleteAbility, createVirtue, updateVirtue, deleteVirtue, createFlaw, updateFlaw, deleteFlaw };
+}
+const BASE_URL =
+    (typeof import.meta !== 'undefined' && (import.meta as any)?.env?.VITE_API_URL) ||
+    'https://biblioteca-backend-nine-beta.vercel.app/api';
+
+async function http<T>(path: string, init?: RequestInit): Promise<T> {
+    const res = await fetch(`${BASE_URL}${path}`, {
+        headers: { 'Content-Type': 'application/json' },
+        ...init,
+    });
+    if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`Erro HTTP ${res.status} em ${path}: ${text || res.statusText}`);
+    }
+    return res.json() as Promise<T>;
+}
+
+const api = {
+    getAkin: () => http<{
+        profile: AkinProfile;
+        abilities: Ability[];
+        virtues: Virtue[];
+        flaws: Flaw[];
+    }>('/akin'),
+
+    /** tenta POST e, se falhar por método, faz PUT */
+    upsertAkin: async (payload: any) => {
+        try {
+            return await http<{ profile: AkinProfile }>('/akin', {
+                method: 'POST',
+                body: JSON.stringify(payload),
+            });
+        } catch (e: any) {
+            // fallback PUT
+            return await http<{ profile: AkinProfile }>('/akin', {
+                method: 'PUT',
+                body: JSON.stringify(payload),
+            });
+        }
+    },
+
+    // Abilities
+    createAbility: (body: any) =>
+        http<Ability>('/akin/abilities', { method: 'POST', body: JSON.stringify(body) }),
+    updateAbility: (id: string, body: any) =>
+        http<Ability>(`/akin/abilities/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+    deleteAbility: (id: string) => http<void>(`/akin/abilities/${id}`, { method: 'DELETE' }),
+
+    // Virtues
+    createVirtue: (body: any) =>
+        http<Virtue>('/akin/virtues', { method: 'POST', body: JSON.stringify(body) }),
+    updateVirtue: (id: string, body: any) =>
+        http<Virtue>(`/akin/virtues/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+    deleteVirtue: (id: string) => http<void>(`/akin/virtues/${id}`, { method: 'DELETE' }),
+
+    // Flaws
+    createFlaw: (body: any) =>
+        http<Flaw>('/akin/flaws', { method: 'POST', body: JSON.stringify(body) }),
+    updateFlaw: (id: string, body: any) =>
+        http<Flaw>(`/akin/flaws/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+    deleteFlaw: (id: string) => http<void>(`/akin/flaws/${id}`, { method: 'DELETE' }),
+};
 
 /** =========================
  *  Tipos (compatíveis com backend atual)
@@ -49,28 +168,8 @@ export type Spell = {
 };
 
 /** =========================
- *  Helpers de API e estado
+ *  Helpers de estado
  *  ========================= */
-function ns() {
-    const hasNs = !!(apiSvc as any).akin;
-    return {
-        get: () => hasNs ? apiSvc.akin.get() : (apiSvc.getAkin?.() as Promise<any>),
-        upsert: (p: any) => hasNs ? apiSvc.akin.upsert(p) : (apiSvc.saveAkinProfile?.(p) as Promise<any>),
-
-        createAbility: (p: any) => hasNs ? apiSvc.akin.createAbility(p) : (apiSvc.addAbility?.(p) as Promise<any>),
-        updateAbility: (id: string, p: any) => hasNs ? apiSvc.akin.updateAbility(id, p) : (apiSvc.updateAbility?.(id, p) as Promise<any>),
-        deleteAbility: (id: string) => hasNs ? apiSvc.akin.deleteAbility(id) : (apiSvc.deleteAbility?.(id) as Promise<void>),
-
-        createVirtue: (p: any) => hasNs ? apiSvc.akin.createVirtue(p) : (apiSvc.addVirtue?.(p) as Promise<any>),
-        updateVirtue: (id: string, p: any) => hasNs ? apiSvc.akin.updateVirtue(id, p) : (apiSvc.updateVirtue?.(id, p) as Promise<any>),
-        deleteVirtue: (id: string) => hasNs ? apiSvc.akin.deleteVirtue(id) : (apiSvc.deleteVirtue?.(id) as Promise<void>),
-
-        createFlaw: (p: any) => hasNs ? apiSvc.akin.createFlaw(p) : (apiSvc.addFlaw?.(p) as Promise<any>),
-        updateFlaw: (id: string, p: any) => hasNs ? apiSvc.akin.updateFlaw(id, p) : (apiSvc.updateFlaw?.(id, p) as Promise<any>),
-        deleteFlaw: (id: string) => hasNs ? apiSvc.akin.deleteFlaw(id) : (apiSvc.deleteFlaw?.(id) as Promise<void>),
-    };
-}
-
 function emptyProfile(): NonNullable<AkinProfile> {
     return {
         id: 'akin',
@@ -150,8 +249,7 @@ const AkinPage: React.FC = () => {
         (async () => {
             setLoading(true);
             try {
-                const svc = ns();
-                const data = await svc.get();
+                const data = await api.getAkin();
                 if (cancel) return;
 
                 const profile: NonNullable<AkinProfile> = data?.profile ?? emptyProfile();
@@ -164,6 +262,8 @@ const AkinPage: React.FC = () => {
                 setSpells(parseSpells(profile.spells));
             } catch (e) {
                 console.error('Falha ao carregar AKIN', e);
+                // Inicializa vazio para permitir edição/salvamento
+                setState({ profile: emptyProfile(), abilities: [], virtues: [], flaws: [] });
             } finally {
                 if (!cancel) setLoading(false);
             }
@@ -199,8 +299,7 @@ const AkinPage: React.FC = () => {
     /** Habilidades (backend) */
     const handleAddAbility = async () => {
         try {
-            const svc = ns();
-            const created = await svc.createAbility({ name: 'Nova Habilidade', value: 0, specialty: '' });
+            const created = await api.createAbility({ name: 'Nova Habilidade', value: 0, specialty: '' });
             setState(prev => ({ ...prev, abilities: [...prev.abilities, created] }));
             setEditingAbility(created);
         } catch (e) { console.error(e); }
@@ -208,8 +307,7 @@ const AkinPage: React.FC = () => {
     const handleUpdateAbility = async () => {
         if (!editingAbility) return;
         try {
-            const svc = ns();
-            const upd = await svc.updateAbility(editingAbility.id, {
+            const upd = await api.updateAbility(editingAbility.id, {
                 name: editingAbility.name,
                 value: Number(editingAbility.value) || 0,
                 specialty: editingAbility.specialty ?? '',
@@ -220,8 +318,7 @@ const AkinPage: React.FC = () => {
     };
     const handleDeleteAbility = async (id: string) => {
         try {
-            const svc = ns();
-            await svc.deleteAbility(id);
+            await api.deleteAbility(id);
             setState(prev => ({ ...prev, abilities: prev.abilities.filter(a => a.id !== id) }));
         } catch (e) { console.error(e); }
     };
@@ -236,15 +333,14 @@ const AkinPage: React.FC = () => {
         const isVirtue = vfModal.type === 'virtue';
         const body = vfModal.item as any;
         try {
-            const svc = ns();
             if (body?.id) {
-                const upd = isVirtue ? await svc.updateVirtue(body.id, body) : await svc.updateFlaw(body.id, body);
+                const upd = isVirtue ? await api.updateVirtue(body.id, body) : await api.updateFlaw(body.id, body);
                 setState(prev => ({
                     ...prev,
                     [isVirtue ? 'virtues' : 'flaws']: (prev as any)[isVirtue ? 'virtues' : 'flaws'].map((x: any) => x.id === upd.id ? upd : x)
                 }));
             } else {
-                const created = isVirtue ? await svc.createVirtue(body) : await svc.createFlaw(body);
+                const created = isVirtue ? await api.createVirtue(body) : await api.createFlaw(body);
                 setState(prev => ({
                     ...prev,
                     [isVirtue ? 'virtues' : 'flaws']: [ ...(prev as any)[isVirtue ? 'virtues' : 'flaws'], created ]
@@ -255,9 +351,8 @@ const AkinPage: React.FC = () => {
     };
     const handleDeleteVirtueFlaw = async (type: 'virtue' | 'flaw', id: string) => {
         try {
-            const svc = ns();
-            if (type === 'virtue') await svc.deleteVirtue(id);
-            else await svc.deleteFlaw(id);
+            if (type === 'virtue') await api.deleteVirtue(id);
+            else await api.deleteFlaw(id);
             setState(prev => ({
                 ...prev,
                 [type === 'virtue' ? 'virtues' : 'flaws']: (prev as any)[type === 'virtue' ? 'virtues' : 'flaws'].filter((v: any) => v.id !== id)
@@ -289,18 +384,17 @@ const AkinPage: React.FC = () => {
         if (!state.profile) return;
         setSaveStatus('saving');
         try {
-            const svc = ns();
             const payload = {
-                name: state.profile.name,
-                house: state.profile.house,
-                age: state.profile.age,
+                name: state.profile.name ?? '',
+                house: state.profile.house ?? '',
+                age: state.profile.age ?? null,
                 characteristics: state.profile.characteristics,
                 arts: state.profile.arts,
                 spells: stringifySpells(spells),
-                notes: state.profile.notes,
+                notes: state.profile.notes ?? '',
             };
-            const updated = await svc.upsert(payload);
-            setState(prev => ({ ...prev, profile: updated?.profile ?? { ...(prev.profile ?? emptyProfile()), ...payload } }));
+            const { profile } = await api.upsertAkin(payload);
+            setState(prev => ({ ...prev, profile: (profile ?? { ...(prev.profile ?? emptyProfile()), ...payload }) as AkinProfile }));
             setSaveStatus('saved');
             setTimeout(() => setSaveStatus('idle'), 1500);
         } catch (err) {
@@ -319,7 +413,7 @@ const AkinPage: React.FC = () => {
 
     const akin = (state.profile ?? emptyProfile());
 
-    /** Render de habilidade (estilo do seu exemplo) */
+    /** Render de habilidade */
     const renderAbility = (ability: Ability) => {
         if (editingAbility?.id === ability.id) {
             return (
@@ -358,10 +452,10 @@ const AkinPage: React.FC = () => {
         </span>
                 <div className="flex items-center gap-3">
                     <span className="font-bold text-lg text-purple-accent print:text-black">{ability.value}</span>
-                    <button type="button" onClick={() => setEditingAbility({ ...ability })} className="text-gray-400 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity print:hidden">
+                    <button type="button" onClick={() => setEditingAbility({ ...ability })} className="text-gray-400 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity print:hidden" aria-label="Editar habilidade">
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.536L16.732 3.732z" /></svg>
                     </button>
-                    <button type="button" onClick={() => handleDeleteAbility(ability.id)} className="text-red-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity print:hidden">
+                    <button type="button" onClick={() => handleDeleteAbility(ability.id)} className="text-red-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity print:hidden" aria-label="Excluir habilidade">
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 012 0v6a1 1 0 11-2 0V8z" clipRule="evenodd" /></svg>
                     </button>
                 </div>
@@ -411,6 +505,7 @@ const AkinPage: React.FC = () => {
                                                     setEditingCharacteristic({ key: null, value: 0 });
                                                 }}
                                                 className="text-green-accent hover:text-green-400 print:hidden"
+                                                aria-label="Salvar característica"
                                             >
                                                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" /></svg>
                                             </button>
@@ -422,6 +517,7 @@ const AkinPage: React.FC = () => {
                                                 type="button"
                                                 onClick={() => setEditingCharacteristic({ key, value: akin.characteristics[key] })}
                                                 className="text-gray-400 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity print:hidden"
+                                                aria-label="Editar característica"
                                             >
                                                 <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.536L16.732 3.732z" /></svg>
                                             </button>
@@ -467,6 +563,7 @@ const AkinPage: React.FC = () => {
                                                             type="button"
                                                             onClick={() => setEditingArt({ key, value: akin.arts[key] })}
                                                             className="text-gray-400 hover:text-white print:hidden"
+                                                            aria-label={`Editar ${key}`}
                                                         >
                                                             <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.536L16.732 3.732z" /></svg>
                                                         </button>
@@ -509,6 +606,7 @@ const AkinPage: React.FC = () => {
                                                             type="button"
                                                             onClick={() => setEditingArt({ key, value: akin.arts[key] })}
                                                             className="text-gray-400 hover:text-white print:hidden"
+                                                            aria-label={`Editar ${key}`}
                                                         >
                                                             <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.536L16.732 3.732z" /></svg>
                                                         </button>
@@ -554,10 +652,10 @@ const AkinPage: React.FC = () => {
                       </span>
                                         </h3>
                                         <div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity print:hidden">
-                                            <button type="button" onClick={() => openSpellModal(spell)} className="hover:text-white text-gray-400">
+                                            <button type="button" onClick={() => openSpellModal(spell)} className="hover:text-white text-gray-400" aria-label="Editar magia">
                                                 <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.536L16.732 3.732z" /></svg>
                                             </button>
-                                            <button type="button" onClick={() => handleDeleteSpell(spell.id)} className="hover:text-red-400 text-red-500">
+                                            <button type="button" onClick={() => handleDeleteSpell(spell.id)} className="hover:text-red-400 text-red-500" aria-label="Excluir magia">
                                                 <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 012 0v6a1 1 0 11-2 0V8z" clipRule="evenodd" /></svg>
                                             </button>
                                         </div>
